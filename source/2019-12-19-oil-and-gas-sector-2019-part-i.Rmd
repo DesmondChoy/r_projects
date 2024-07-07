@@ -3,6 +3,9 @@ title: "Oil and Gas Sector 2019 (Part I)"
 author: "Desmond Choy"
 date: "2019-12-19"
 slug: "oil-and-gas-sector-2019-part-i"
+output:
+  html_document:
+    theme: readable
 categories: []
 tags:
 - r
@@ -11,6 +14,7 @@ tags:
 - visualization
 editor_options:
   chunk_output_type: console
+
 ---
 
 ```{r Setup, include=FALSE}
