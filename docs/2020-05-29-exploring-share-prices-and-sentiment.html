@@ -1,0 +1,596 @@
+---
+title: Exploring Share Prices and Sentiment
+author: Desmond Choy
+date: '2020-05-29'
+slug: exploring-share-prices-and-sentiment
+summary:  NLP techniques (bag of words, tf-idf) are used to extract sentiment analysis and word importance from companies' earning call transcripts
+readingtime: '12'
+tags:
+  - EDA
+  - NLP
+  - r
+coverImage: https://images.unsplash.com/photo-1457369804613-52c61a468e7d?ixlib=rb-1.2.1&auto=format&fit=crop&w=1050&q=80
+thumbnailImage: https://images.unsplash.com/photo-1559589689-577aabd1db4f?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=1050&q=80
+thumbnailImagePosition: left
+coverCaption: Books By Patrick Tomasso
+---
+
+
+
+<p>Despite these troubling times brought upon us by Covid-19, one interesting investment theme has outperformed the market - “stay-at-home” stocks. These generally consist of companies that would benefit from the lockdown such as big retailers with delivery services, tech companies providing essential software for WFH setups, and video gaming companies that benefit from bored kids and adults. These companies have outperformed the broader indices significantly and, intuitively, sentiment for these companies should be positive, right?</p>
+<p>As a continuation of my <a href="https://desmondchoy.netlify.app/2020/05/hip-hop-lyrics-be-flowin-with-tidy-text-mining/">previous post</a>, I wanted to explore text mining on company’s earnings call transcripts. For US companies, these are conducted quarterly and are helpful in providing an understanding of business strategy, opportunities and headwinds it might face in the coming quarters - prefaced by management’s prepared remarks and guidance, followed by a Q&amp;A session with analysts.</p>
+<p>In this post I’ll showcase the following:</p>
+<ul>
+<li>Visualizing sentiment shifts over time on a sector and company level</li>
+<li>Identifying important company-specific words used</li>
+<li>Observing sentiment change as a earnings call progresses</li>
+</ul>
+<div id="data" class="section level1">
+<h1>Data</h1>
+<p>For our data, we use quarterly earnings call transcripts from four internet companies from 1Q 2015 to 1Q 2020 inclusive. Sea Limited only went public in Oct 2017 so transcripts would only be available after then. I would also caveat that these companies may not be directly comparable due to diversity in revenue streams as well as different geographic regions - but I chose them on the basis that a significant portion of their revenue comes from internet-related services such as gaming and e-commerce.</p>
+<p>Because these earnings call transcripts were extracted from Bloomberg, I’m unable to share them due to copyright issues although I hope the analysis would still be helpful for the reader.</p>
+<div id="disclaimer" class="section level2">
+<h2>Disclaimer</h2>
+<p>All data that I have used in this presentation is obtained from Bloomberg and I do not own any of it. Nothing in this document should be construed as investment advice, recommendations, an investment strategy, or whether or not to “buy”, “sell” or “hold” an investment, nor should it be construed or relied upon as tax, regulatory or accounting advice.</p>
+</div>
+<div id="libraries" class="section level2">
+<h2>Libraries</h2>
+<p>We load the libraries necessary for our workflow.</p>
+<pre class="r"><code>library(pdftools) #merging and extracting text from pdfs
+library(tidyverse) #data wrangling
+library(lubridate) #extracting dates
+library(tidytext) #text mining
+library(fishualize) #visualization
+
+theme_set(theme_minimal())</code></pre>
+</div>
+<div id="merging-pdfs" class="section level2">
+<h2>Merging PDFs</h2>
+<p>We merge the pdfs into one using <code>pdf_combine()</code></p>
+<pre class="r"><code>pdf_combine(
+  c(&quot;ATVI.pdf&quot;, &quot;Netease.pdf&quot;, &quot;SEA.pdf&quot;, &quot;Tencent.pdf&quot;),
+    output = &quot;merged.pdf&quot;)</code></pre>
+</div>
+<div id="data-extraction-and-cleaning" class="section level2">
+<h2>Data Extraction And Cleaning</h2>
+<p>We begin by extracting text from the merged pdf transcript, labeling it then <a href="https://www.tidytextmining.com/tidytext.html">tokenizing</a> the text so we can analyze words as individual units (unigram). <code>pdf_data()</code> was a super helpful function that did an incredible job extracting tidy data out of the pdf.</p>
+<p>I did some further wrangling with purrr’s <code>map()</code> function to extract dates and company’s name for each of the sections.</p>
+<pre class="r"><code>df &lt;- pdf_data(&quot;merged.pdf&quot;) %&gt;%
+  #select text column
+  map(select, text) %&gt;%
+  map( ~ mutate(
+    .,
+    #extract date
+    date = ymd(str_extract(., &quot;\\d+\\-\\d+\\-\\d+&quot;)),
+    #extract company&#39;s name
+    company = word(.$text[3])
+  )) %&gt;%
+  #merge all lists together
+  reduce(bind_rows) %&gt;%
+  #tokenize words by unigrams
+  unnest_tokens(word, text) 
+
+df</code></pre>
+<pre><code>## # A tibble: 710,300 x 3
+##    date       company    word      
+##    &lt;date&gt;     &lt;chr&gt;      &lt;chr&gt;     
+##  1 2020-05-05 Activision company   
+##  2 2020-05-05 Activision name      
+##  3 2020-05-05 Activision activision
+##  4 2020-05-05 Activision blizzard  
+##  5 2020-05-05 Activision company   
+##  6 2020-05-05 Activision ticker    
+##  7 2020-05-05 Activision atvi      
+##  8 2020-05-05 Activision us        
+##  9 2020-05-05 Activision date      
+## 10 2020-05-05 Activision 2020      
+## # ... with 710,290 more rows</code></pre>
+<p>Checking if data was labeled correctly, we can see there are different naming conventions for NetEase over the years. Let’s standardize them.</p>
+<pre class="r"><code>df %&gt;% 
+  distinct(company)</code></pre>
+<pre><code>## # A tibble: 5 x 1
+##   company   
+##   &lt;chr&gt;     
+## 1 Activision
+## 2 Netease   
+## 3 NetEase   
+## 4 Sea       
+## 5 Tencent</code></pre>
+<pre class="r"><code>df$company[df$company == &quot;Netease&quot;] &lt;- &quot;NetEase&quot;
+
+df %&gt;% 
+  distinct(company)</code></pre>
+<pre><code>## # A tibble: 4 x 1
+##   company   
+##   &lt;chr&gt;     
+## 1 Activision
+## 2 NetEase   
+## 3 Sea       
+## 4 Tencent</code></pre>
+<p>Now to check if dates are mapped correctly. Quarterly calls are done with a 3 weeks lag i.e. 1Q 2015 results will take place in 2Q 2015. Since our data starts from 1Q15, we should expect 3 calls in 2015, 4 calls from 2016-2019, and 2 calls in 2020 (covering 4Q19 and 1Q20). The exception would be Sea, which only went public in late 2017.</p>
+<pre class="r"><code>df %&gt;% 
+  group_by(company) %&gt;% 
+  distinct(date, .keep_all = T) %&gt;% 
+  mutate(year = year(date)) %&gt;%
+  count(company, year) %&gt;% 
+  filter(!n == 4) %&gt;% 
+  arrange(year)</code></pre>
+<pre><code>## # A tibble: 8 x 3
+## # Groups:   company [4]
+##   company     year     n
+##   &lt;chr&gt;      &lt;dbl&gt; &lt;int&gt;
+## 1 Activision  2015     3
+## 2 NetEase     2015     3
+## 3 Tencent     2015     3
+## 4 Sea         2017     1
+## 5 Activision  2020     2
+## 6 NetEase     2020     2
+## 7 Sea         2020     2
+## 8 Tencent     2020     2</code></pre>
+</div>
+<div id="removing-stop-words-and-numbers" class="section level2">
+<h2>Removing Stop Words And Numbers</h2>
+<p>Next, we remove stop words (words that are not useful for an analysis, typically extremely common words such as <em>the</em>, <em>of</em>, <em>to</em>, and so forth in English) and numbers used during the earnings call.</p>
+<pre class="r"><code>df_tidy &lt;- df %&gt;%
+  #remove stop words
+  anti_join(stop_words, by = &quot;word&quot;) %&gt;%
+  #remove numbers (digits)
+  filter(!str_detect(word, c(&quot;\\d+&quot;))) 
+
+df_tidy</code></pre>
+<pre><code>## # A tibble: 303,908 x 3
+##    date       company    word       
+##    &lt;date&gt;     &lt;chr&gt;      &lt;chr&gt;      
+##  1 2020-05-05 Activision company    
+##  2 2020-05-05 Activision activision 
+##  3 2020-05-05 Activision blizzard   
+##  4 2020-05-05 Activision company    
+##  5 2020-05-05 Activision ticker     
+##  6 2020-05-05 Activision atvi       
+##  7 2020-05-05 Activision date       
+##  8 2020-05-05 Activision event      
+##  9 2020-05-05 Activision description
+## 10 2020-05-05 Activision earnings   
+## # ... with 303,898 more rows</code></pre>
+</div>
+</div>
+<div id="sentiment-analysis-in-a-finance-context" class="section level1">
+<h1>Sentiment Analysis In A Finance Context</h1>
+<p>To extract sentiment for our purposes, we use the Loughran and McDonald (2011) financial lexicon - a widely used financial dictionary for NLP analysis due to its accessibility, its comprehensiveness, and its financial-specific context. As stressed in Loughran and Mcdonald (2011):</p>
+<blockquote>
+<p>"Almost three-fourths of the words identified as negative by the widely used <em>Harvard Dictionary</em> are words typically not considered negative in financial contexts.</p>
+</blockquote>
+<p>What they have done was to filter their initial master word list down to their
+sentiment word lists by examining 10-K filings between 1994 and 2008 inclusively. More information can be found in Section 4.1 of S&amp;P Global’s <a href="https://www.spglobal.com/marketintelligence/en/documents/sp-global-market-intelligence-nlp-primer-september-2018.pdf">NLP Primer</a>.</p>
+<pre class="r"><code>df_tidy &lt;- df_tidy %&gt;% 
+  inner_join(get_sentiments(&quot;loughran&quot;), by = &quot;word&quot;) %&gt;% 
+  #counting number of sentiment words 
+  add_count(company, name = &quot;senti_n&quot;)
+
+df_tidy %&gt;% 
+  select(date, company, word, sentiment) %&gt;% 
+  sample_n(10)</code></pre>
+<pre><code>## # A tibble: 10 x 4
+##    date       company    word         sentiment  
+##    &lt;date&gt;     &lt;chr&gt;      &lt;chr&gt;        &lt;chr&gt;      
+##  1 2018-11-08 Activision benefit      positive   
+##  2 2019-05-22 Sea        strong       positive   
+##  3 2019-11-13 Tencent    unidentified uncertainty
+##  4 2020-05-05 Activision persist      negative   
+##  5 2017-05-17 Tencent    regulators   litigious  
+##  6 2016-08-17 Tencent    benefit      positive   
+##  7 2017-08-16 Tencent    benefit      positive   
+##  8 2015-11-10 Tencent    declines     negative   
+##  9 2019-05-02 Activision disruptions  negative   
+## 10 2020-05-18 Sea        crisis       negative</code></pre>
+<div id="sentiment-analysis-over-time-sector" class="section level2">
+<h2>Sentiment Analysis Over Time: Sector</h2>
+<p>With stock prices of these internet stocks up anywhere between 10% to 96% since the beginning of the year, intuitively, we would expect negative sentiment to be low, right?</p>
+<pre class="r"><code>text &lt;- data.frame(
+  label = c(&quot;+19% YTD&quot;, &quot;+23% YTD&quot;, &quot;+96% YTD&quot;, &quot;13% YTD&quot;),
+  company = c(&quot;Activision&quot;, &quot;NetEase&quot;, &quot;Sea&quot;, &quot;Tencent&quot;),
+  x = c(as.Date(&quot;2020-04-01&quot;), as.Date(&quot;2020-04-01&quot;), as.Date(&quot;2020-04-01&quot;), as.Date(&quot;2020-04-01&quot;)),
+  y = c(185, 125, 150, 200)
+)
+
+df_tidy %&gt;%
+  filter(sentiment %in% c(&quot;negative&quot;, &quot;uncertainty&quot;, &quot;constraining&quot;)) %&gt;%
+  ungroup() %&gt;%
+  mutate(date = floor_date(date, unit = &quot;quarter&quot;)) %&gt;%
+  ggplot(aes(date)) +
+  geom_bar(aes(fill = sentiment), position = &quot;stack&quot;) +
+  facet_wrap(~ company, scales = &quot;free_x&quot;) +
+  scale_x_date(date_breaks = &quot;12 months&quot;, date_labels = &quot;%Y&quot;) +
+  scale_fill_fish_d(option = &quot;Antennarius_commerson&quot;) +
+  geom_text(data = text,
+            mapping = aes(x = x, y = y, label = label)) +
+  labs(
+    x = &quot;Date&quot;,
+    y = &quot;Count&quot;,
+    fill = &quot;Sentiment&quot;,
+    title = &quot;1Q20 Negative Sentiment Across All Four Internet Companies Worsened&quot;,
+    subtitle = &quot;Contrast this against spectacular 2020 year-to-date (YTD) share price gains&quot;,
+    caption = &quot;Source: Quarterly earnings call transcripts since 1Q 2015\nNote: Sea Ltd only went public in Oct 2017&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.title.position = &quot;plot&quot;,
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+    legend.title = element_text(face = &quot;bold&quot;),
+    legend.position = &quot;top&quot;
+  ) </code></pre>
+<p><img src="/post/2020-05-29-exploring-share-prices-and-sentiment_files/figure-html/negative%20sentiment-1.png" width="1152" /></p>
+<pre class="r"><code>df_tidy %&gt;% 
+  group_by(company) %&gt;% 
+  distinct(date, .keep_all = TRUE) %&gt;% 
+  filter(date &gt; &quot;2020-01-01&quot;)</code></pre>
+<pre><code>## # A tibble: 8 x 5
+## # Groups:   company [4]
+##   date       company    word         sentiment   senti_n
+##   &lt;date&gt;     &lt;chr&gt;      &lt;chr&gt;        &lt;chr&gt;         &lt;int&gt;
+## 1 2020-05-05 Activision opportunity  positive       4940
+## 2 2020-02-06 Activision incorrect    negative       4940
+## 3 2020-05-20 NetEase    litigation   negative       3505
+## 4 2020-02-27 NetEase    litigation   negative       3505
+## 5 2020-05-18 Sea        opportunity  positive       2777
+## 6 2020-03-03 Sea        opportunity  positive       2777
+## 7 2020-05-13 Tencent    question     negative       5507
+## 8 2020-03-18 Tencent    unidentified uncertainty    5507</code></pre>
+<p>Our negative sentiment signal seems to contradict the percentage gains that share prices have made this year. Or does it? Let’s explore the positive sentiment signal.</p>
+<pre class="r"><code>df_tidy %&gt;%
+  filter(sentiment %in% c(&quot;positive&quot;)) %&gt;%
+  ungroup() %&gt;%
+  mutate(date = floor_date(date, unit = &quot;quarter&quot;)) %&gt;%
+  ggplot(aes(date, fill = company)) +
+  geom_bar(position = &quot;stack&quot;, show.legend = FALSE) +
+  facet_wrap(~ company, scales = &quot;free_x&quot;) +
+  scale_x_date(date_breaks = &quot;12 months&quot;, date_labels = &quot;%Y&quot;) +
+  scale_fill_fish_d(option = &quot;Antennarius_commerson&quot;) +
+  labs(
+    x = &quot;Date&quot;,
+    y = &quot;Count&quot;,
+    fill = &quot;Sentiment&quot;,
+    title = &quot;1Q20 Positive Sentiment Appears Mixed With No Clear Signal&quot;,
+    subtitle = &quot;Sea, with 96% YTD share price gains (as of time of writing), had a surprising drop in positive sentiment&quot;,
+    caption = &quot;Source: Quarterly earnings call transcripts since 1Q 2015\nNote: Sea Ltd only went public in Oct 2017&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.title.position = &quot;plot&quot;,
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+    legend.title = element_text(face = &quot;bold&quot;),
+    legend.position = &quot;top&quot;
+  ) </code></pre>
+<p><img src="/post/2020-05-29-exploring-share-prices-and-sentiment_files/figure-html/positive%20sentiment-1.png" width="1152" /></p>
+</div>
+<div id="sentiment-analysis-over-time-company" class="section level2">
+<h2>Sentiment Analysis Over Time: Company</h2>
+<p>Using the Loughran lexicon, we can identify the most common words driving sentiment. Here we use Sea’s transcripts since it went public.</p>
+<pre class="r"><code>df_tidy %&gt;%
+  filter(company == &quot;Sea&quot;) %&gt;%
+  count(word, sentiment) %&gt;%
+  group_by(sentiment) %&gt;%
+  top_n(10) %&gt;%
+  ungroup() %&gt;%
+  mutate(word = reorder_within(word, n, sentiment)) %&gt;%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(
+    ~ fct_relevel(sentiment, &quot;positive&quot;, &quot;negative&quot;, &quot;litigious&quot;, &quot;uncertainty&quot;, &quot;constraining&quot;),
+    scales = &quot;free&quot;,
+    labeller = as_labeller(c(&quot;positive&quot; = &quot;Positive&quot;, 
+                             &quot;negative&quot; = &quot;Negative&quot;, 
+                             &quot;litigious&quot; = &quot;Litigious&quot;, 
+                             &quot;uncertainty&quot; = &quot;Uncertainty&quot;, 
+                             &quot;constraining&quot; = &quot;Constraining&quot;,
+                             &quot;superfluous&quot; = &quot;Superfluous&quot;))) +
+  scale_x_reordered() +
+  scale_fill_fish_d(option = &quot;Antennarius_commerson&quot;) +
+  labs(
+    x = &quot;&quot;,
+    y = &quot;Count&quot;,
+    fill = &quot;Sentiment&quot;,
+    title = &quot;Since Sea Went Public, What Words Have Been Driving Sentiment?&quot;,
+    subtitle = &quot;The Loughran lexicon divides words into sentiments: &#39;positive&#39;, &#39;negative&#39;, &#39;litigious&#39;, &#39;uncertainty&#39;, &#39;constraining&#39;&quot;,
+    caption = &quot;Source: Quarterly earnings call transcripts&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.title.position = &quot;plot&quot;,
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+    legend.title = element_text(face = &quot;bold&quot;),
+    legend.position = &quot;bottom&quot;
+  ) </code></pre>
+<p><img src="/post/2020-05-29-exploring-share-prices-and-sentiment_files/figure-html/sea-1.png" width="1152" /></p>
+<p>We can also compare transcripts in 2019 against transcripts in 2020 to potentially identify shifts in sentiment across time. One observation worth exploring is the ratio of negative to positive words over comparative time periods.</p>
+<pre class="r"><code>library(patchwork)
+
+p1 &lt;- df_tidy %&gt;%
+  filter(company == &quot;Sea&quot;,
+         date &gt; &quot;2019-01-01&quot; &amp; date &lt; &quot;2020-01-01&quot;,
+         !sentiment %in% c(&quot;litigious&quot;, &quot;superfluous&quot;)) %&gt;%
+  count(word, sentiment) %&gt;%
+  group_by(sentiment) %&gt;%
+  top_n(10) %&gt;%
+  ungroup() %&gt;%
+  mutate(word = reorder_within(word, n, sentiment)) %&gt;%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(
+    ~ fct_relevel(sentiment, &quot;positive&quot;, &quot;negative&quot;, &quot;litigious&quot;, &quot;uncertainty&quot;, &quot;constraining&quot;),
+    scales = &quot;free&quot;,
+    labeller = as_labeller(
+      c(&quot;positive&quot; = &quot;Positive&quot;,
+        &quot;negative&quot; = &quot;Negative&quot;,
+        &quot;litigious&quot; = &quot;Litigious&quot;,
+        &quot;uncertainty&quot; = &quot;Uncertainty&quot;,
+        &quot;constraining&quot; = &quot;Constraining&quot;,
+        &quot;superfluous&quot; = &quot;Superfluous&quot;)
+    )) +
+  scale_x_reordered() +
+  scale_fill_fish_d(option = &quot;Antennarius_commerson&quot;) +
+  labs(x = &quot;&quot;,
+       y = &quot;Count&quot;,
+       fill = &quot;Sentiment&quot;,
+       title = &quot;2019&quot;) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 12),
+    plot.title.position = &quot;plot&quot;,
+    plot.subtitle = element_text(size = 12),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 12),
+    legend.title = element_text(face = &quot;bold&quot;),
+    legend.position = &quot;bottom&quot;
+  ) 
+
+p2 &lt;- df_tidy %&gt;%
+  filter(company == &quot;Sea&quot;,
+         date &gt; &quot;2020-01-01&quot;,
+         !sentiment %in% c(&quot;litigious&quot;, &quot;superfluous&quot;)) %&gt;%
+  count(word, sentiment) %&gt;%
+  group_by(sentiment) %&gt;%
+  top_n(10) %&gt;%
+  ungroup() %&gt;%
+  mutate(word = reorder_within(word, n, sentiment)) %&gt;%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(
+    ~ fct_relevel(sentiment, &quot;positive&quot;, &quot;negative&quot;, &quot;litigious&quot;, &quot;uncertainty&quot;, &quot;constraining&quot;),
+    scales = &quot;free&quot;,
+    labeller = as_labeller(
+      c(&quot;positive&quot; = &quot;Positive&quot;,
+        &quot;negative&quot; = &quot;Negative&quot;,
+        &quot;litigious&quot; = &quot;Litigious&quot;,
+        &quot;uncertainty&quot; = &quot;Uncertainty&quot;,
+        &quot;constraining&quot; = &quot;Constraining&quot;,
+        &quot;superfluous&quot; = &quot;Superfluous&quot;)
+    )) +
+  scale_x_reordered() +
+  scale_fill_fish_d(option = &quot;Antennarius_commerson&quot;) +
+  labs(x = &quot;&quot;,
+       y = &quot;Count&quot;,
+       fill = &quot;Sentiment&quot;,
+       title = &quot;2020 YTD&quot;) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 12),
+    plot.title.position = &quot;plot&quot;,
+    plot.subtitle = element_text(size = 12),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 12),
+    legend.title = element_text(face = &quot;bold&quot;),
+    legend.position = &quot;bottom&quot;
+  ) 
+
+p1 + p2 + 
+  plot_annotation(
+  title = &quot;Exploring Changes Over Time In Sentiment: Sea (2019 Versus 2020)&quot;,
+  subtitle = &quot;Words like &#39;leadership&#39; and &#39;opportunity/opportunities&#39; continue to dominate positive sentiment;\n&#39;Volatility&#39; has crept up to become the most used word framing uncertainty in 2020 thus far&quot;,
+  theme = theme(plot.title = element_text(face = &quot;bold&quot;, size = 18),
+                plot.subtitle = element_text(size = 12))) +
+  plot_layout(guides = &quot;collect&quot;)</code></pre>
+<p><img src="/post/2020-05-29-exploring-share-prices-and-sentiment_files/figure-html/sea%202019%20vs%202020%20YTD-1.png" width="1152" /></p>
+</div>
+<div id="company-specific-word-importance" class="section level2">
+<h2>Company-Specific Word Importance</h2>
+<p>As a refresher, to gauge sentiment, we have been using the highest count or <em>term frequency</em> of a word. Another measure would be to incorporate a word’s <em>inverse document frequency</em> which applies a downward adjustment towards a word’s importance if said word occurs frequently across documents.</p>
+<p>Combining both, we get <em>term frequency-inverse document frequency</em> or <strong>tf-idf</strong>: the frequency of a term adjusted for how rarely it is used. More reading can be <a href="https://www.tidytextmining.com/tfidf.html">found here</a>.</p>
+<p>Sorting by the words with the highest tf, we see words like <em>the</em> and <em>to</em> are common across all company’s transcripts, with a corresponding tf-idf of zero. Here we filter out numbers but don’t filter out any stop words as certain stop words could have a meaningful TF-IDF score.</p>
+<pre class="r"><code>#total times each word appears for each company
+df_count &lt;- df %&gt;% 
+  count(company, word, sort = TRUE)
+
+#total number of words across all companies
+total &lt;- df_count %&gt;% 
+  group_by(company) %&gt;% 
+  summarise(total = sum(n))
+
+df_count &lt;- df_count %&gt;% 
+  left_join(total)
+
+df_tf_idf &lt;- df_count %&gt;%
+ filter(!str_detect(word, c(&quot;\\d+&quot;))) %&gt;% 
+  bind_tf_idf(word, company, n)
+
+df_tf_idf %&gt;% 
+  arrange(desc(tf))</code></pre>
+<pre><code>## # A tibble: 20,396 x 7
+##    company    word      n  total     tf   idf tf_idf
+##    &lt;chr&gt;      &lt;chr&gt; &lt;int&gt;  &lt;int&gt;  &lt;dbl&gt; &lt;dbl&gt;  &lt;dbl&gt;
+##  1 NetEase    the    6092 135569 0.0473     0      0
+##  2 Sea        the    4812 112882 0.0441     0      0
+##  3 Activision the    8762 213379 0.0429     0      0
+##  4 Tencent    the    9694 248470 0.0408     0      0
+##  5 Activision and    7809 213379 0.0382     0      0
+##  6 NetEase    and    4413 135569 0.0343     0      0
+##  7 Activision of     6729 213379 0.0329     0      0
+##  8 Tencent    and    7419 248470 0.0312     0      0
+##  9 Sea        and    3279 112882 0.0301     0      0
+## 10 Sea        of     3251 112882 0.0298     0      0
+## # ... with 20,386 more rows</code></pre>
+<p>We create a custom list of stop words to filter out names.</p>
+<pre class="r"><code>custom &lt;- df_tf_idf %&gt;%
+  arrange(desc(tf_idf)) %&gt;%
+  group_by(company) %&gt;%
+  top_n(50) %&gt;%
+  ungroup() %&gt;% 
+  filter(!word %in% c(&quot;candy&quot;, &quot;blizzcon&quot;, &quot;hearthstone&quot;, &quot;kaola&quot;, &quot;youdao&quot;, &quot;yanxuan&quot;, &quot;commerce&quot;, &quot;westward&quot;, &quot;shopee&quot;, &quot;indonesia&quot;, &quot;fire&quot;, &quot;ebitda&quot;, &quot;sellers&quot;, &quot;gmv&quot;, &quot;qq&quot;, &quot;weixin&quot;, &quot;hk&quot;, &quot;mini&quot;, &quot;fintech&quot;, &quot;moments&quot;, &quot;browsers&quot;)) %&gt;% 
+  select(word)</code></pre>
+<p>Using the custom list of stop words and sorting by the highest tf-idf instead, we can visualize the highest tf-idf words across companies for the last five years.</p>
+<pre class="r"><code>df_tf_idf %&gt;%
+  select(-total) %&gt;%
+  arrange(desc(tf_idf)) %&gt;%
+  group_by(company) %&gt;%
+  top_n(60) %&gt;%
+  ungroup() %&gt;%
+  anti_join(custom) %&gt;%
+  mutate(word = reorder_within(word, tf_idf, company)) %&gt;%
+  ggplot(aes(word, tf_idf, fill = company)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap( ~ company, ncol = 2, scales = &quot;free&quot;) +
+  scale_x_reordered() +
+  scale_fill_fish_d(option = &quot;Antennarius_commerson&quot;) +
+  labs(
+    y = &quot;&quot;,
+    fill = &quot;Sentiment&quot;,
+    title = &quot;How Do We Quantify The Importance Of Words?&quot;,
+    subtitle = &quot;Using tf-idf and a custom list of stop words, we&#39;re able to identify words related to a core strategic focus for the respective companies&quot;,
+    caption = &quot;Source: Quarterly earnings call transcripts since 1Q 2015&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.title.position = &quot;plot&quot;,
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+    legend.title = element_text(face = &quot;bold&quot;),
+    legend.position = &quot;bottom&quot;
+  )</code></pre>
+<p><img src="/post/2020-05-29-exploring-share-prices-and-sentiment_files/figure-html/highest%20tf-idf-1.png" width="1152" /></p>
+<p>An alternative visualization would be using a word cloud.</p>
+<pre class="r"><code>library(ggwordcloud)
+
+df_tf_idf %&gt;%
+  select(-total) %&gt;%
+  arrange(desc(tf_idf)) %&gt;%
+  group_by(company) %&gt;%
+  top_n(120) %&gt;%
+  ungroup() %&gt;%
+  anti_join(custom) %&gt;% 
+  ggplot(aes(label = word,
+             size = tf_idf,
+             colour = company)) +
+  geom_text_wordcloud_area(
+    rm_outside = T,
+    eccentricity = 0.65,
+    shape = &quot;circle&quot;
+  ) +
+  scale_size_area(max_size = 40) +
+  facet_wrap(. ~ company, nrow = 2) +
+  scale_color_fish_d(option = &quot;Antennarius_commerson&quot;) +
+  labs(
+    x = &quot;&quot;,
+    y = &quot;&quot;,
+    title = &quot;An Alternative Way to Visualize Text Data: Word Clouds&quot;,
+    subtitle = &quot;Size of the word is an indication of its tf-idf importance&quot;,
+    caption = &quot;Source: Quarterly earnings call transcripts since 1Q 2015&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.title.position = &quot;plot&quot;,
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+    legend.title = element_text(face = &quot;bold&quot;),
+    legend.position = &quot;top&quot;
+  )</code></pre>
+<p><img src="/post/2020-05-29-exploring-share-prices-and-sentiment_files/figure-html/word%20cloud-1.png" width="1152" /></p>
+</div>
+<div id="sentiment-change-within-each-earnings-call" class="section level2">
+<h2>Sentiment Change Within Each Earnings Call</h2>
+<p>The structure of each earnings call is one that is prefaced by management’s prepared remarks and guidance, which are generally optimistic, followed by a Q&amp;A session with analysts.</p>
+<p>We can divide the earnings call into four equal parts to track sentiment levels as the call takes place e.g. sentiment changes during prepared remarks (first quantile) and the analyst Q&amp;A.</p>
+<pre class="r"><code>#df before stop words and digits are removed
+#Break up the earnings call into four quartiles.
+df_sorted &lt;- df %&gt;%
+  group_by(date, company) %&gt;%
+  mutate(linenumber = row_number(),
+         total_words = length(linenumber)) %&gt;%
+  mutate(percent = linenumber / total_words) %&gt;%
+  group_by(date, company) %&gt;%
+  mutate(quantile = case_when(
+    percent &lt; 0.25 ~ 1,
+    between(percent, 0.25, 0.5) ~ 2,
+    between(percent, 0.5, 0.75) ~ 3,
+    TRUE ~ 4
+  )) %&gt;% 
+  ungroup() %&gt;% 
+  #remove stop words
+  anti_join(stop_words, by = &quot;word&quot;) %&gt;%
+  #remove numbers (digits)
+  filter(!str_detect(word, c(&quot;\\d+&quot;))) %&gt;% 
+  inner_join(get_sentiments(&quot;loughran&quot;), by = &quot;word&quot;) %&gt;% 
+  add_count(company, name = &quot;senti_n&quot;) %&gt;% 
+  select(-4:-6)</code></pre>
+<p>For the purposes of visualization, we group ‘negative’, ‘litigious’, ‘uncertainty’, and ‘constraining’ sentiments together as one category - ‘negative’.</p>
+<pre class="r"><code>df_sorted %&gt;%
+  filter(company == &quot;Sea&quot;,
+         date &gt; &quot;2018-01-01&quot;,
+         !sentiment %in% c(&quot;superfluous&quot;)) %&gt;%
+  mutate(
+    sentiment2 = fct_collapse(
+      sentiment,
+      positive = &quot;positive&quot;,
+      negative = c(&quot;negative&quot;, &quot;constraining&quot;, &quot;uncertainty&quot;, &quot;litigious&quot;)
+    ),
+    sentiment2 = fct_relevel(sentiment2, &quot;positive&quot;, &quot;negative&quot;)
+  ) %&gt;%
+  ggplot(aes(quantile, fill = sentiment2)) +
+  geom_bar(position = &quot;dodge&quot;, width = 0.7) +
+  facet_wrap( ~ date, scales = &quot;free_x&quot;, nrow = 3) +
+  scale_fill_fish_d(option = &quot;Antennarius_commerson&quot;) +
+  labs(
+    x = &quot;Call Duration (divided equally into four parts)&quot;,
+    y = &quot;&quot;,
+    fill = &quot;Sentiment&quot;,
+    title = &quot;Tracking Sentiment Changes Within Each Earnings Call (Sea)&quot;,
+    subtitle = &quot;Beginning portion of earnings calls contain prepared remarks and generally reflect a higher positive sentiment&quot;,
+    caption = &quot;Source: Quarterly earnings call transcripts&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.title.position = &quot;plot&quot;,
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+    legend.title = element_text(face = &quot;bold&quot;),
+    legend.position = &quot;top&quot;
+  )</code></pre>
+<p><img src="/post/2020-05-29-exploring-share-prices-and-sentiment_files/figure-html/Within%20Sea%20earnings%20call-1.png" width="1152" /></p>
+</div>
+</div>
+<div id="final-thoughts" class="section level1">
+<h1>Final Thoughts</h1>
+<p>I’ll wrap up with this post by citing one of my <a href="https://www.oaktreecapital.com/docs/default-source/memos/2015-09-09-its-not-easy.pdf">favourite memos</a> from Howard Marks, where he recalls a lunch he had with Charlie Munger:</p>
+<blockquote>
+<p>As it ended and I got up to go, he said something about investing that I keep going back to: “<strong>It’s not supposed to be easy. Anyone who finds it easy is stupid.</strong>”</p>
+</blockquote>
+<p>There are a number of reasons why we shouldn’t expect a straightforward correlation (be it positive or negative) between sentiment and share price. In the first chart we saw negative sentiment trending upwards despite a surge in share prices, which may seem counter-intuitive but if you think about it - if everything was straightforward and intuitive, making investing an easy decision-making progress - no one would ever incur losses, which we know isn’t the case.</p>
+<p>My thoughts as to why the relationship between sentiment and share prices are trickier than it seems:</p>
+<ul>
+<li><strong>Share prices are driven by other factors and running ahead of sentiment</strong> This can be a function of several factors not captured by sentiment extracted from earnings calls, including technical factors e.g. retail or institutional fund flows or general euphoria in the markets e.g. Trump tweets<br />
+</li>
+<li><strong>Sentiment from earnings call transcripts alone may not be sufficient to capture the full picture.</strong> This can be a function of time lag e.g. events happening after the earnings call took place, or that the sentiment captured from management and analysts are not a reflection of the broader market sentiment. One possible way to address the latter is to increase our sample size of companies, and exploring other sources of unstructured data such as news or Twitter where sentiment can also be extracted from</li>
+<li><strong>Sentiment signal captured may be wrong</strong> e.g. questions asked were directed at competitors, negative words captured were double negatives, in which case using bigrams could be better served, or sentiment extracted were taken out of context due to language nuances.</li>
+</ul>
+<p>Does that mean sentiment analysis in a finance context is useless? Hardly so. The examples I’ve shown above are interesting applications for inference and, applied on an adequate sample size over an appropriate time horizon, could serve as a helpful signal amidst all the noise in financial data. However, my sense is that some feature pre-processing is needed if sentiment signals were to be used with the intention of forecasting. A timely reminder that investing shouldn’t be easy.</p>
+</div>

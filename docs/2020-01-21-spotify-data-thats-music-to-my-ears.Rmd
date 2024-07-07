@@ -1,0 +1,197 @@
+---
+title: Spotify Data? That's Music To My Ears!
+author: Desmond Choy
+date: '2020-01-21'
+slug: spotify-data-thats-music-to-my-ears
+categories: []
+tags:
+  - r
+  - EDA
+  - visualization
+  - tidytuesday
+keywords:
+  - tech
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 15,
+  fig.height = 12)
+```
+
+```{r Libraries, warning=FALSE, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(lubridate)
+library(hrbrthemes)
+library(tidytext)
+```
+
+This dataset was taken from the very popular [TidyTuesday](https://github.com/rfordatascience/tidytuesday) github repo, and this was my attempt at having a go at visualization given my love for music and this was a Spotify dataset.   
+
+In the spirit of "[Perfect is the enemy of good](https://en.wikipedia.org/wiki/Perfect_is_the_enemy_of_good)", this will be a short post aimed at answering just a couple of questions with EDA and visualization.
+
+Datasets from TidyTuesday are usually cleaned (or at least there'll be instructions/hints on what one should first start with), and I begin by importing the data and exploring it via `skimr`.
+
+```{r}
+spotify_songs <-
+  read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-21/spotify_songs.csv')
+
+skimr::skim(spotify_songs)
+```
+
+A lot of interesting labels are associated with the data, some of which include *danceability*, *instrumentalness* and *valence*. Full definitions can be found in the associated [data dictionary](https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-01-21/readme.md).
+
+I proceed to wrangle the data by adding my own labels to indicate the decades in which the track/album appears in.
+
+```{r}
+
+spotify <- spotify_songs %>%
+  distinct(track_name, track_artist, .keep_all = TRUE) %>%
+  mutate(year = str_extract(track_album_release_date, "^\\d..."))
+
+spotify$decades <- cut(
+  as.numeric(spotify$year),
+  c(1956, 1960, 1970, 1980, 1990, 2000, 2010, 2021),
+  labels = c("50s", "60s", "70s", "80s", "90s", "2000s", "2010s")
+)
+```
+
+Using track popularity as a gauge, how have subgenres evolved over the decades?  
+
+```{r}
+spotify %>%
+  group_by(decades, playlist_subgenre) %>%
+  add_count(playlist_subgenre) %>% 
+  filter(n > 5) %>% 
+  ggplot(aes(
+    reorder_within(playlist_subgenre, track_popularity, decades),
+    track_popularity
+  )) +
+  geom_boxplot(aes(fill = playlist_genre)) +
+  coord_flip() +
+  facet_wrap(decades ~ ., nrow = 2, scales = "free_y") +
+  scale_x_reordered() +
+  theme_ipsum() +
+  labs(
+    title = "Popularity of Genres Through The Decades",
+    subtitle = "Recent Decades Saw An Explosion of Music Genres - Led by Rock and R&B",
+    caption = "\n Source: TidyTuesday
+      Visualization: Desmond Choy (Twitter @Norest)",
+    fill = "Music Genres",
+    x = "Music Sub-Genres",
+    y = "Track Popularity"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 25),
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.position = "top",
+    legend.title = element_text("Music Genres"),
+    legend.box = "horizontal",
+    legend.text = element_text(size = 10)
+  ) +
+  guides(row = guide_legend(nrow = 1))
+
+```
+
+Permanent wave stood out as a rock sub-genre that, until 2010, stood the test of time in terms of popularity.  
+
+Trouble is... as an avid music fan, I've not heard of this sub-genre permanent wave at all! Still horrified, let me dig into the dataset a little more. I discover permanent wave actually had a few of my all-time favourite artists and I've been a closet permanent wave fan all this while!
+
+```{r}
+spotify %>% 
+  filter(playlist_subgenre == "permanent wave") %>% 
+  count(track_artist, sort = TRUE) 
+```
+
+How about some suggestions to danceable EDM tracks that I could listen to when out for a run?  
+
+We filter by Danceability, as defined as *how suitable a track is for dancing based on a combination of musical elements including tempo, rhythm stability, beat strength, and overall regularity. A value of 0.0 is least danceable and 1.0 is most danceable.*
+
+```{r}
+spotify %>% 
+  select(playlist_genre, playlist_subgenre, track_name, danceability) %>% 
+  filter(playlist_genre == "edm") %>%
+  distinct(track_name, .keep_all = TRUE) %>% 
+  group_by(playlist_subgenre) %>%
+  top_n(n = 20, wt = danceability) %>% 
+  ggplot(aes(reorder_within(track_name, danceability, playlist_subgenre), danceability)) +
+  geom_point(aes(colour = playlist_subgenre), size = 3, show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(. ~ playlist_subgenre, nrow = 2, scales = "free_y") +
+  scale_x_reordered() +
+  theme_ipsum() +
+  labs(
+    title = "What are some of the most danceable EDM tracks?",
+    subtitle = "Danceability describes how suitable a track is for dancing based on a combination of musical elements\nA value of 0.0 is least danceable and 1.0 is most danceable.",
+    caption = "\n Source: TidyTuesday
+      Visualization: Desmond Choy (Twitter @Norest)",
+    fill = "Music Genres",
+    x = "Album Name",
+    y = "Danceability"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 25),
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.position = "top",
+    legend.title = element_text("Music Genres"),
+    legend.box = "horizontal",
+    legend.text = element_text(size = 10)
+  ) +
+  guides(row = guide_legend(nrow = 1))
+  
+```
+
+Finally, how about some curated suggestions - Based on the criteria listed below, what are some suggestions for sub-genres?  
+
+* `Instrumentalness`: Predicts whether a track contains no vocals. "Ooh" and "aah" sounds are treated as instrumental in this context. The closer the instrumentalness value is to 1.0, the greater likelihood the track contains no vocal content.  
+* `Acousticness`: A confidence measure from 0.0 to 1.0 of whether the track is acoustic. 1.0 represents high confidence the track is acoustic.  
+* `Valence`: A measure from 0.0 to 1.0 describing the musical positiveness conveyed by a track. Tracks with high valence sound more positive (e.g. happy, cheerful, euphoric), while tracks with low valence sound more negative (e.g. sad, depressed, angry).
+
+So my approach was to create a criteria that involved summing up `Instrumentalness`, `Acousticness`, `Valence`. Sub-genres with the highest criteria would then be picked .... right?
+
+```{r}
+spotify %>% 
+  mutate(criteria = instrumentalness + acousticness + valence) %>% 
+  select(playlist_genre, playlist_subgenre, track_album_name, criteria) %>% 
+  distinct(track_album_name, .keep_all = TRUE) %>% 
+  group_by(playlist_subgenre) %>%
+  summarise(criteria = sum(criteria)/n()) %>% 
+  arrange(desc(criteria))
+```
+
+Hip-hop?? When you think acousticness and instrumental tunes ... hip hop doesn't quite come to mind.
+
+```{r}
+spotify %>% 
+  mutate(criteria = instrumentalness + acousticness + valence) %>% 
+  select(playlist_genre, playlist_subgenre, track_artist, track_album_name, criteria) %>% 
+  distinct(track_album_name, .keep_all = TRUE) %>% 
+  filter(playlist_subgenre == "hip hop") %>% 
+  arrange(desc(criteria)) %>% 
+  head(20)
+```
+
+I initally thought there was an error in the data or my code. But I picked a few tunes to sample and it turns out I genuinely enjoyed all of them! This was an amazingly fruitful and productive exploration of new music to widen my aural horizons.
+
+Here's a Top20 playlist below, based on my criteria.
+
+```{r}
+spotify %>% 
+  mutate(criteria = instrumentalness + acousticness + valence) %>% 
+  select(playlist_genre, playlist_subgenre, track_artist, track_album_name, criteria) %>% 
+  distinct(track_album_name, .keep_all = TRUE) %>% 
+  arrange(desc(criteria)) %>% 
+  head(20)
+```
+
+As always, RMarkdown document can be found in my [github](https://github.com/DesmondChoy) should you wish to replicate these results.
+
+

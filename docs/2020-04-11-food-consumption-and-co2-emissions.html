@@ -1,0 +1,522 @@
+---
+title: Food Consumption and CO2 Emissions
+author: Desmond Choy
+date: '2020-04-11'
+slug: food-consumption-and-co2-emissions
+categories: []
+tags:
+  - r
+  - tidytuesday
+  - EDA
+  - visualization
+  - machine learning
+keywords:
+  - tech
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+<p>This will be my first attempt at machine learning using the <code>tidymodels</code> package, with a dataset taken from <a href="https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-02-18/readme.md">TidyTuesday</a>. The code used to scrape this data can be found <a href="https://r-tastic.co.uk/post/from-messy-to-tidy/">here</a>.</p>
+<p>The study analyses data from the Food and Agriculture Organization of the United Nations (FAO) to determine the quantity of produce supplied for consumption of 11 food types for all countries researched. Using CO2 emissions data, the carbon footprint per capita is then calculated for each food type.</p>
+<p>I heavily borrow intuition gleaned from this <a href="https://juliasilge.com/blog/food-hyperparameter-tune/">blog post</a> by Julia Silge - who does an amazing job at detailing the intricacies of <code>tidymodels</code> metapackage in her various blog posts.</p>
+<pre class="r"><code>library(tidyverse)
+
+theme_set(theme_minimal())
+
+food_consumption &lt;- readr::read_csv(&quot;https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-18/food_consumption.csv&quot;)
+food_consumption</code></pre>
+<pre><code>## # A tibble: 1,430 x 4
+##    country   food_category            consumption co2_emmission
+##    &lt;chr&gt;     &lt;chr&gt;                          &lt;dbl&gt;         &lt;dbl&gt;
+##  1 Argentina Pork                           10.5          37.2 
+##  2 Argentina Poultry                        38.7          41.5 
+##  3 Argentina Beef                           55.5        1712   
+##  4 Argentina Lamb &amp; Goat                     1.56         54.6 
+##  5 Argentina Fish                            4.36          6.96
+##  6 Argentina Eggs                           11.4          10.5 
+##  7 Argentina Milk - inc. cheese            195.          278.  
+##  8 Argentina Wheat and Wheat Products      103.           19.7 
+##  9 Argentina Rice                            8.77         11.2 
+## 10 Argentina Soybeans                        0             0   
+## # ... with 1,420 more rows</code></pre>
+<p>From the Data Dictionary, these are some important definitions:</p>
+<ul>
+<li>Consumption is measured in kg/person/year<br />
+</li>
+<li>Co2 Emission is measured in kg CO2/person/year</li>
+</ul>
+<p>Using a preliminary <code>skim</code>, the dataset has 130 unique countries, each tagged with 11 different categories of food, and no missing values.</p>
+<pre class="r"><code>library(skimr)
+
+skim(food_consumption)</code></pre>
+<table>
+<caption><span id="tab:unnamed-chunk-1">Table 1: </span>Data summary</caption>
+<tbody>
+<tr class="odd">
+<td align="left">Name</td>
+<td align="left">food_consumption</td>
+</tr>
+<tr class="even">
+<td align="left">Number of rows</td>
+<td align="left">1430</td>
+</tr>
+<tr class="odd">
+<td align="left">Number of columns</td>
+<td align="left">4</td>
+</tr>
+<tr class="even">
+<td align="left">_______________________</td>
+<td align="left"></td>
+</tr>
+<tr class="odd">
+<td align="left">Column type frequency:</td>
+<td align="left"></td>
+</tr>
+<tr class="even">
+<td align="left">character</td>
+<td align="left">2</td>
+</tr>
+<tr class="odd">
+<td align="left">numeric</td>
+<td align="left">2</td>
+</tr>
+<tr class="even">
+<td align="left">________________________</td>
+<td align="left"></td>
+</tr>
+<tr class="odd">
+<td align="left">Group variables</td>
+<td align="left">None</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Variable type: character</strong></p>
+<table>
+<thead>
+<tr class="header">
+<th align="left">skim_variable</th>
+<th align="right">n_missing</th>
+<th align="right">complete_rate</th>
+<th align="right">min</th>
+<th align="right">max</th>
+<th align="right">empty</th>
+<th align="right">n_unique</th>
+<th align="right">whitespace</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">country</td>
+<td align="right">0</td>
+<td align="right">1</td>
+<td align="right">3</td>
+<td align="right">22</td>
+<td align="right">0</td>
+<td align="right">130</td>
+<td align="right">0</td>
+</tr>
+<tr class="even">
+<td align="left">food_category</td>
+<td align="right">0</td>
+<td align="right">1</td>
+<td align="right">4</td>
+<td align="right">24</td>
+<td align="right">0</td>
+<td align="right">11</td>
+<td align="right">0</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Variable type: numeric</strong></p>
+<table>
+<thead>
+<tr class="header">
+<th align="left">skim_variable</th>
+<th align="right">n_missing</th>
+<th align="right">complete_rate</th>
+<th align="right">mean</th>
+<th align="right">sd</th>
+<th align="right">p0</th>
+<th align="right">p25</th>
+<th align="right">p50</th>
+<th align="right">p75</th>
+<th align="right">p100</th>
+<th align="left">hist</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">consumption</td>
+<td align="right">0</td>
+<td align="right">1</td>
+<td align="right">28.11</td>
+<td align="right">49.82</td>
+<td align="right">0</td>
+<td align="right">2.37</td>
+<td align="right">8.89</td>
+<td align="right">28.13</td>
+<td align="right">430.76</td>
+<td align="left">▇▁▁▁▁</td>
+</tr>
+<tr class="even">
+<td align="left">co2_emmission</td>
+<td align="right">0</td>
+<td align="right">1</td>
+<td align="right">74.38</td>
+<td align="right">152.10</td>
+<td align="right">0</td>
+<td align="right">5.21</td>
+<td align="right">16.53</td>
+<td align="right">62.60</td>
+<td align="right">1712.00</td>
+<td align="left">▇▁▁▁▁</td>
+</tr>
+</tbody>
+</table>
+<pre class="r"><code>food_consumption %&gt;% 
+  count(food_category)</code></pre>
+<pre><code>## # A tibble: 11 x 2
+##    food_category                n
+##    &lt;chr&gt;                    &lt;int&gt;
+##  1 Beef                       130
+##  2 Eggs                       130
+##  3 Fish                       130
+##  4 Lamb &amp; Goat                130
+##  5 Milk - inc. cheese         130
+##  6 Nuts inc. Peanut Butter    130
+##  7 Pork                       130
+##  8 Poultry                    130
+##  9 Rice                       130
+## 10 Soybeans                   130
+## 11 Wheat and Wheat Products   130</code></pre>
+<p>Which food item, on average, contributes the most to co2 emmissions?</p>
+<pre class="r"><code>food_consumption %&gt;% 
+  group_by(food_category) %&gt;% 
+  summarize(avg.co2 = sum(co2_emmission)/n()) %&gt;% 
+  ggplot(aes(fct_reorder(food_category, avg.co2), avg.co2, fill = food_category)) +
+  geom_col(show.legend = F) +
+  coord_flip() +
+  labs(
+    x = &quot;Food Categories&quot;,
+    y = &quot;Average CO2 Emissions&quot;
+  )</code></pre>
+<p><img src="/post/2020-04-11-food-consumption-and-co2-emissions_files/figure-html/unnamed-chunk-2-1.png" width="672" /></p>
+<p>How about inspecting the median values and country outliers through a boxplot?</p>
+<pre class="r"><code>library(ggrepel) #ggplot identification of data points
+
+food_consumption %&gt;%
+  group_by(food_category) %&gt;%
+  ggplot(aes(
+    fct_reorder(food_category, co2_emmission),
+    co2_emmission,
+    fill = food_category
+  )) +
+  geom_boxplot(show.legend = F) +
+  geom_text_repel(
+    data = . %&gt;%
+      filter(food_category == &quot;Beef&quot;) %&gt;% 
+      mutate(percentile = co2_emmission &gt;= quantile(co2_emmission, 0.95, na.rm = T)) %&gt;%
+      filter(percentile == 1),
+    aes(label = country)
+  ) +
+  coord_flip() +
+  labs(
+    x = &quot;Food Categories&quot;,
+    y = &quot;Average CO2 Emissions&quot;
+  )</code></pre>
+<p><img src="/post/2020-04-11-food-consumption-and-co2-emissions_files/figure-html/unnamed-chunk-3-1.png" width="672" /></p>
+<p>Filtering for <code>Beef</code> only, let’s take a closer look at the top 20 countries.</p>
+<pre class="r"><code>food_consumption %&gt;% 
+  filter(food_category == &quot;Beef&quot;) %&gt;%
+  arrange(desc(consumption)) %&gt;% 
+  top_n(20) %&gt;% 
+  ggplot(aes(fct_reorder(country, consumption), consumption, fill = country)) +
+  geom_col(show.legend = F) +
+  coord_flip() +
+  labs(
+    x = &quot;Country&quot;,
+    y = &quot;Beef Consumption&quot;
+  )</code></pre>
+<p><img src="/post/2020-04-11-food-consumption-and-co2-emissions_files/figure-html/unnamed-chunk-4-1.png" width="672" /></p>
+<p>I did not expect Argentina to be on top of that list by such a significant margin. Doing a bit of googling to fact-check, it does appear Argentinians are lovers of red meat. However, that consumption per person also seems to be <a href="https://www.batimes.com.ar/news/argentina/worlds-biggest-carnivores-are-turning-their-backs-on-beef.phtml">coming down</a>, due to a combination of rampant inflation as well as a growing health awareness of non-meat options. But I digress.</p>
+<p>Quite a number of North and South America countries America show up as heavy beef consumers. This gives me an idea - can I predict, using <code>co2_emmission</code>, if a country belongs to the Americas or not?</p>
+<p>I use the <code>countrycode</code> package to create a new column identifying which continent a country belongs to, and further create a binary classification of whether or not the country belongs to Americas.</p>
+<pre class="r"><code>library(countrycode)
+library(janitor)
+
+food &lt;- food_consumption %&gt;%
+  select(-consumption) %&gt;%
+  pivot_wider(names_from = food_category,
+              values_from = co2_emmission) %&gt;%
+  clean_names() %&gt;%
+  mutate(continent = countrycode(country,
+                                 origin = &quot;country.name&quot;,
+                                 destination = &quot;continent&quot;)) %&gt;%
+  mutate(americas = case_when(continent == &quot;Americas&quot; ~ &quot;Americas&quot;,
+                              TRUE ~ &quot;Other&quot;)) %&gt;%
+  select(-country,-continent) %&gt;%
+  mutate_if(is.character, as_factor)
+
+food %&gt;% 
+  select(americas, everything())</code></pre>
+<pre><code>## # A tibble: 130 x 12
+##    americas  pork poultry  beef lamb_goat   fish  eggs milk_inc_cheese
+##    &lt;fct&gt;    &lt;dbl&gt;   &lt;dbl&gt; &lt;dbl&gt;     &lt;dbl&gt;  &lt;dbl&gt; &lt;dbl&gt;           &lt;dbl&gt;
+##  1 Americas  37.2    41.5 1712       54.6   6.96 10.5             278.
+##  2 Other     85.4    49.5 1045.     346.   28.2   7.82            334.
+##  3 Other     38.5    14.2  694.     536.    6.15 11.4             433.
+##  4 Other     76.8    28.9  412.     740.  119.    7.57            322.
+##  5 Other     78.9    37.6  694.     662.   32.5   9.1             196.
+##  6 Americas  97.8    53.7 1118.      15.1  19.7  13.4             363.
+##  7 Americas  59.6    29.5  898.     288.   10.4  12.1             300.
+##  8 Other    154.     23.0  922.      58.5  36.9  13.4             364.
+##  9 Americas  44.6    48.3 1211.      21.7  16.0   8.25            213.
+## 10 Other     36.7    19.7  721.     335.    8.32  7.62            410.
+## # ... with 120 more rows, and 4 more variables: wheat_and_wheat_products &lt;dbl&gt;,
+## #   rice &lt;dbl&gt;, soybeans &lt;dbl&gt;, nuts_inc_peanut_butter &lt;dbl&gt;</code></pre>
+<p>Given that all of our variables are numeric, a <code>ggscatmat</code> - a scatterplot matrix - can be used:</p>
+<ul>
+<li>Diagonals represent density plots<br />
+</li>
+<li>Top half represent correlation coefficients<br />
+</li>
+<li>Bottom half represents a scatterplot</li>
+</ul>
+<pre class="r"><code>library(GGally)
+
+food %&gt;% 
+  ggscatmat(columns = 1:11, color = &quot;americas&quot;, alpha = 0.7)</code></pre>
+<p><img src="/post/2020-04-11-food-consumption-and-co2-emissions_files/figure-html/unnamed-chunk-6-1.png" width="672" /></p>
+<p>Nothing too out of the ordinary, although poultry &amp; beef tends to be contribute more CO2 in Americas versus rest of the world - very likely as a function of higher consumption.</p>
+<p>With that, let’s dive into modelling.</p>
+<blockquote>
+<p>Data Splitting</p>
+</blockquote>
+<p>We begin by splitting the dataset into training and test sets. I opt to use stratified random sampling - accomplished by selecting samples at random within each class. As Kuhn &amp; Johnson <a href="http://www.feat.engineering/data-splitting.html">(2019)</a> puts it - this approach ensures that the frequency distribution of the outcome is approximately equal within the training and test sets.</p>
+<pre class="r"><code>library(tidymodels)
+set.seed(2020)
+
+food_split &lt;- initial_split(food, strata = americas)
+food_split</code></pre>
+<pre><code>## &lt;Training/Validation/Total&gt;
+## &lt;99/31/130&gt;</code></pre>
+<pre class="r"><code>food_train &lt;- training(food_split)
+food_test &lt;- testing(food_split)</code></pre>
+<blockquote>
+<p>Data Preprocessing</p>
+</blockquote>
+<p>Next, we use the <code>recipes</code> package. The intuition behind this package is to define a recipe or blueprint that can be used to sequentially define the encodings and preprocessing of the data (i.e. feature engineering).</p>
+<pre class="r"><code>food_rec &lt;- recipe(americas ~ ., data = food_train) %&gt;%
+  step_corr(all_numeric()) %&gt;%
+  prep()
+
+food_rec</code></pre>
+<pre><code>## Data Recipe
+## 
+## Inputs:
+## 
+##       role #variables
+##    outcome          1
+##  predictor         11
+## 
+## Training data contained 99 data points and no missing data.
+## 
+## Operations:
+## 
+## Correlation filter removed no terms [trained]</code></pre>
+<p><code>step_corr</code>: Potentially remove variables that have large absolute correlations with other variables. Even though the correlation recipe was applied, no terms were removed - implying low multicollinearity.</p>
+<blockquote>
+<p>Model Specification</p>
+</blockquote>
+<p>Let’s begin with the specification of two models - Logistic Regression and Random Forest.</p>
+<pre class="r"><code>log_spec &lt;- logistic_reg(mode = &quot;classification&quot;) %&gt;%
+  set_engine(&quot;glm&quot;)
+
+rf_spec &lt;- rand_forest(mode = &quot;classification&quot;) %&gt;%
+  set_engine(&quot;ranger&quot;)</code></pre>
+<p>Now we fit (train) the models with a juice-d version. <code>juice</code> essentially runs the preprocessing steps mentioned in the recipe, and returns us the processed variables.</p>
+<pre class="r"><code>log_fit &lt;- log_spec %&gt;%
+  fit(americas ~ .,
+      data = juice(food_rec))
+log_fit</code></pre>
+<pre><code>## parsnip model object
+## 
+## Fit time:  0ms 
+## 
+## Call:  stats::glm(formula = formula, family = stats::binomial, data = data)
+## 
+## Coefficients:
+##              (Intercept)                      pork                   poultry  
+##                -0.367402                  0.010330                 -0.127695  
+##                     beef                 lamb_goat                      fish  
+##                -0.002816                  0.006490                  0.074879  
+##                     eggs           milk_inc_cheese  wheat_and_wheat_products  
+##                -0.210197                 -0.000185                  0.302985  
+##                     rice                  soybeans    nuts_inc_peanut_butter  
+##                 0.013010                 -0.176848                  0.206664  
+## 
+## Degrees of Freedom: 98 Total (i.e. Null);  87 Residual
+## Null Deviance:       102.3 
+## Residual Deviance: 45.77     AIC: 69.77</code></pre>
+<pre class="r"><code>rf_fit &lt;- rf_spec %&gt;% 
+  fit(americas ~ .,
+      data = juice(food_rec))
+rf_fit </code></pre>
+<pre><code>## parsnip model object
+## 
+## Fit time:  51ms 
+## Ranger result
+## 
+## Call:
+##  ranger::ranger(formula = formula, data = data, num.threads = 1,      verbose = FALSE, seed = sample.int(10^5, 1), probability = TRUE) 
+## 
+## Type:                             Probability estimation 
+## Number of trees:                  500 
+## Sample size:                      99 
+## Number of independent variables:  11 
+## Mtry:                             3 
+## Target node size:                 10 
+## Variable importance mode:         none 
+## Splitrule:                        gini 
+## OOB prediction error (Brier s.):  0.1171945</code></pre>
+<blockquote>
+<p>Model Evaluation</p>
+</blockquote>
+<p>Now to compare training results versus test results (which we have not touched up until now).</p>
+<p>Mostly for my own benefit, I list down the definitions of performance metrics that I’ll be using:</p>
+<ul>
+<li><strong>Accuracy</strong> is the total number of correct predictions divided by the total number of predictions made for a dataset.<br />
+</li>
+<li><strong>Precision</strong> quantifies the number of positive class predictions that actually belong to the positive class.<br />
+</li>
+<li><strong>Recall/Sensitivity</strong> quantifies the number of positive class predictions made out of all positive examples in the dataset.<br />
+</li>
+<li><strong>F-Measure</strong> provides a single score that balances both the concerns of precision and recall in one number.</li>
+</ul>
+<pre class="r"><code>results_train &lt;- log_fit %&gt;%
+  predict(new_data = food_train) %&gt;%
+  mutate(truth = food_train$americas) %&gt;%
+  conf_mat(truth, .pred_class) %&gt;%
+  summary() %&gt;%
+  mutate(model = &quot;log&quot;) %&gt;%
+  bind_rows(
+    rf_fit %&gt;%
+      predict(new_data = food_train) %&gt;%
+      mutate(truth = food_train$americas) %&gt;%
+      conf_mat(truth, .pred_class) %&gt;%
+      summary() %&gt;%
+      mutate(model = &quot;rf&quot;)
+  )
+
+results_test &lt;- log_fit %&gt;%
+  predict(new_data = bake(food_rec, food_test)) %&gt;%
+  mutate(truth = food_test$americas) %&gt;%
+  conf_mat(truth, .pred_class) %&gt;%
+  summary() %&gt;%
+  mutate(model = &quot;log&quot;) %&gt;%
+  bind_rows(
+    rf_fit %&gt;%
+      predict(new_data = bake(food_rec, food_test)) %&gt;%
+      mutate(truth = food_test$americas) %&gt;%
+      conf_mat(truth, .pred_class) %&gt;%
+      summary() %&gt;%
+      mutate(model = &quot;rf&quot;)
+  )</code></pre>
+<pre class="r"><code>library(patchwork) #to combine ggplots
+
+p1 &lt;- results_train %&gt;%
+  filter(.metric %in% c(&quot;accuracy&quot;, &quot;precision&quot;, &quot;recall&quot;, &quot;f_meas&quot;)) %&gt;%
+  ggplot(aes(.metric, .estimate, fill = model)) +
+  geom_col(position = &quot;dodge&quot;) +
+  geom_text(aes(label = round(.estimate, 2)),
+            position = position_dodge(width = 0.9), vjust = -0.5) + 
+  labs(
+    x = &quot;Performance Metrics (Training Data)&quot;,
+    y = &quot;Score&quot;
+  )
+
+p2 &lt;- results_test %&gt;%
+  filter(.metric %in% c(&quot;accuracy&quot;, &quot;precision&quot;, &quot;recall&quot;, &quot;f_meas&quot;)) %&gt;%
+  ggplot(aes(.metric, .estimate, fill = model)) +
+  geom_col(position = &quot;dodge&quot;) +
+  geom_text(aes(label = round(.estimate, 2)),
+            position = position_dodge(width = 0.9), vjust = -0.5) + 
+  labs(
+    x = &quot;Performance Metrics (Test Data)&quot;,
+    y = &quot;Score&quot;
+  )
+
+p1 + p2 + plot_layout(guides = &quot;collect&quot;) &amp; theme(legend.position = &#39;bottom&#39;)</code></pre>
+<p><img src="/post/2020-04-11-food-consumption-and-co2-emissions_files/figure-html/unnamed-chunk-13-1.png" width="672" /></p>
+<p>In the training results, random forest does a stellar job with close to perfect scores across these metrics.</p>
+<p>However, in our test results, our logistic regression model handily outperforms random forest. This difference in performance could imply overfitting of the random forest model. Resampling will address this issue of overfitting.</p>
+<blockquote>
+<p>Resampling</p>
+</blockquote>
+<p>From Kuhn &amp; Johnson <a href="http://www.feat.engineering/resampling.html">(2019)</a>, resampling methods can generate different versions of our training set that can be used to simulate how well models would perform on new data.</p>
+<p>In each case, a resampling scheme generates a subset of the data to be used for modeling and another that is used for measuring performance. This stems from the need to understand the effectiveness of the model without resorting to the test set. Simply repredicting the training set is problematic so a procedure is needed to get an appraisal using the training set.</p>
+<p>Here, we opt for a 10-fold cross validation data frame.</p>
+<pre class="r"><code>food_cv_folds &lt;- food_train %&gt;%
+  vfold_cv()
+
+food_cv_folds</code></pre>
+<pre><code>## #  10-fold cross-validation 
+## # A tibble: 10 x 2
+##    splits          id    
+##    &lt;named list&gt;    &lt;chr&gt; 
+##  1 &lt;split [89/10]&gt; Fold01
+##  2 &lt;split [89/10]&gt; Fold02
+##  3 &lt;split [89/10]&gt; Fold03
+##  4 &lt;split [89/10]&gt; Fold04
+##  5 &lt;split [89/10]&gt; Fold05
+##  6 &lt;split [89/10]&gt; Fold06
+##  7 &lt;split [89/10]&gt; Fold07
+##  8 &lt;split [89/10]&gt; Fold08
+##  9 &lt;split [89/10]&gt; Fold09
+## 10 &lt;split [90/9]&gt;  Fold10</code></pre>
+<p>Using our 10-fold CV data frame, we re-fit our models.<br />
+Subsequently, using the <code>collect_metrics</code> function, we are able to succintly summarize our specified performance metrics for both models, join them into a tibble, and use <code>patchwork</code> once again to visualize them all in a single diagram.</p>
+<pre class="r"><code>log_refit &lt;- fit_resamples(
+  log_spec,
+  americas ~ .,
+  resamples = food_cv_folds,
+  control = control_resamples(save_pred = T),
+  metrics = metric_set(accuracy, f_meas, precision, recall)
+)
+
+rf_refit &lt;- fit_resamples(
+  rf_spec,
+  americas ~ .,
+  resamples = food_cv_folds,
+  control = control_resamples(save_pred = T),
+  metrics = metric_set(accuracy, f_meas, precision, recall)
+)
+
+results_train_refit &lt;- log_refit %&gt;%
+  collect_metrics() %&gt;%
+  mutate(model = &quot;log&quot;) %&gt;%
+  bind_rows(rf_refit %&gt;%
+              collect_metrics() %&gt;%
+              mutate(model = &quot;rf&quot;))
+
+p3 &lt;- results_train_refit %&gt;%
+  ggplot(aes(.metric, mean, fill = model)) +
+  geom_col(position = &quot;dodge&quot;) +
+  geom_text(aes(label = round(mean, 2)),
+            position = position_dodge(width = 0.9), vjust = -0.5) + 
+  labs(
+    x = &quot;Performance Metrics (Training Data, Resampled)&quot;,
+    y = &quot;Score&quot;
+  )
+
+(p1 | p3) / p2 + 
+  plot_annotation(title = &quot;Training vs Training (Resampled) vs Test Data&quot;,
+                  subtitle = &quot;After resampling, overfitting is less apparent\nwith training performance metrics more closely resembling test data&quot;) +
+  plot_layout(guides = &quot;collect&quot;) &amp; theme(legend.position = &#39;bottom&#39;)</code></pre>
+<p><img src="/post/2020-04-11-food-consumption-and-co2-emissions_files/figure-html/unnamed-chunk-15-1.png" width="1152" /></p>
+<blockquote>
+<p>Conclusion</p>
+</blockquote>
+<p>I’ve barely explored the tip of the iceberg that is machine learning but I’m excited. There’s plenty of room for improvement, especially with regards to data preprocessing via the <code>recipes</code> package and hyperparameter tuning via the <code>tune</code> package (which I skipped) - which I aim to document in future blog posts.</p>

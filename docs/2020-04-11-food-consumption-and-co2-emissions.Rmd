@@ -1,0 +1,359 @@
+---
+title: Food Consumption and CO2 Emissions
+author: Desmond Choy
+date: '2020-04-11'
+slug: food-consumption-and-co2-emissions
+categories: []
+tags:
+  - r
+  - tidytuesday
+  - EDA
+  - visualization
+  - machine learning
+keywords:
+  - tech
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE)
+```
+
+This will be my first attempt at machine learning using the `tidymodels` package, with a dataset  taken from [TidyTuesday](https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-02-18/readme.md). The code used to scrape this data can be found [here](https://r-tastic.co.uk/post/from-messy-to-tidy/).   
+
+The study analyses data from the Food and Agriculture Organization of the United Nations (FAO) to determine the quantity of produce supplied for consumption of 11 food types for all countries researched. Using CO2 emissions data, the carbon footprint per capita is then calculated for each food type.  
+
+I heavily borrow intuition gleaned from this [blog post](https://juliasilge.com/blog/food-hyperparameter-tune/) by Julia Silge - who does an amazing job at detailing the intricacies of `tidymodels` metapackage in her various blog posts.
+
+```{r Libraries, warning=FALSE, message=FALSE}
+library(tidyverse)
+
+theme_set(theme_minimal())
+
+food_consumption <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-18/food_consumption.csv")
+food_consumption
+```
+
+From the Data Dictionary, these are some important definitions:  
+
+* Consumption is measured in kg/person/year  
+* Co2 Emission is measured in kg CO2/person/year  
+
+Using a preliminary `skim`, the dataset has 130 unique countries, each tagged with 11 different categories of food, and no missing values.
+
+```{r}
+library(skimr)
+
+skim(food_consumption)
+
+food_consumption %>% 
+  count(food_category)
+
+```
+
+Which food item, on average, contributes the most to co2 emmissions?
+
+```{r}
+food_consumption %>% 
+  group_by(food_category) %>% 
+  summarize(avg.co2 = sum(co2_emmission)/n()) %>% 
+  ggplot(aes(fct_reorder(food_category, avg.co2), avg.co2, fill = food_category)) +
+  geom_col(show.legend = F) +
+  coord_flip() +
+  labs(
+    x = "Food Categories",
+    y = "Average CO2 Emissions"
+  )
+```
+
+How about inspecting the median values and country outliers through a boxplot?
+
+```{r}
+library(ggrepel) #ggplot identification of data points
+
+food_consumption %>%
+  group_by(food_category) %>%
+  ggplot(aes(
+    fct_reorder(food_category, co2_emmission),
+    co2_emmission,
+    fill = food_category
+  )) +
+  geom_boxplot(show.legend = F) +
+  geom_text_repel(
+    data = . %>%
+      filter(food_category == "Beef") %>% 
+      mutate(percentile = co2_emmission >= quantile(co2_emmission, 0.95, na.rm = T)) %>%
+      filter(percentile == 1),
+    aes(label = country)
+  ) +
+  coord_flip() +
+  labs(
+    x = "Food Categories",
+    y = "Average CO2 Emissions"
+  )
+```
+
+Filtering for `Beef` only, let's take a closer look at the top 20 countries.
+
+```{r}
+food_consumption %>% 
+  filter(food_category == "Beef") %>%
+  arrange(desc(consumption)) %>% 
+  top_n(20) %>% 
+  ggplot(aes(fct_reorder(country, consumption), consumption, fill = country)) +
+  geom_col(show.legend = F) +
+  coord_flip() +
+  labs(
+    x = "Country",
+    y = "Beef Consumption"
+  )
+
+```
+
+I did not expect Argentina to be on top of that list by such a significant margin. Doing a bit of googling to fact-check, it does appear Argentinians are lovers of red meat. However, that consumption per person also seems to be [coming down](https://www.batimes.com.ar/news/argentina/worlds-biggest-carnivores-are-turning-their-backs-on-beef.phtml), due to a combination of rampant inflation as well as a growing health awareness of non-meat options. But I digress.  
+
+Quite a number of North and South America countries America show up as heavy beef consumers. This gives me an idea - can I predict, using `co2_emmission`, if a country belongs to the Americas or not?  
+ 
+I use the `countrycode` package to create a new column identifying which continent a country belongs to, and further create a binary classification of whether or not the country belongs to Americas.
+
+```{r}
+library(countrycode)
+library(janitor)
+
+food <- food_consumption %>%
+  select(-consumption) %>%
+  pivot_wider(names_from = food_category,
+              values_from = co2_emmission) %>%
+  clean_names() %>%
+  mutate(continent = countrycode(country,
+                                 origin = "country.name",
+                                 destination = "continent")) %>%
+  mutate(americas = case_when(continent == "Americas" ~ "Americas",
+                              TRUE ~ "Other")) %>%
+  select(-country,-continent) %>%
+  mutate_if(is.character, as_factor)
+
+food %>% 
+  select(americas, everything())
+```
+
+Given that all of our variables are numeric, a `ggscatmat` - a scatterplot matrix - can be used:  
+
+* Diagonals represent density plots  
+* Top half represent correlation coefficients   
+* Bottom half represents a scatterplot   
+
+```{r}
+library(GGally)
+
+food %>% 
+  ggscatmat(columns = 1:11, color = "americas", alpha = 0.7)
+
+```
+
+Nothing too out of the ordinary, although poultry & beef tends to be contribute more CO2 in Americas versus rest of the world - very likely as a function of higher consumption.
+
+With that, let's dive into modelling. 
+
+> Data Splitting
+
+We begin by splitting the dataset into training and test sets. I opt to use stratified random sampling - accomplished by selecting samples at random within each class. As Kuhn & Johnson [(2019)](http://www.feat.engineering/data-splitting.html) puts it - this approach ensures that the frequency distribution of the outcome is approximately equal within the training and test sets.
+
+```{r}
+library(tidymodels)
+set.seed(2020)
+
+food_split <- initial_split(food, strata = americas)
+food_split
+
+food_train <- training(food_split)
+food_test <- testing(food_split)
+
+```
+
+> Data Preprocessing
+
+Next, we use the `recipes` package. The intuition behind this package is to define a recipe or blueprint that can be used to sequentially define the encodings and preprocessing of the data (i.e. feature engineering).  
+
+```{r}
+food_rec <- recipe(americas ~ ., data = food_train) %>%
+  step_corr(all_numeric()) %>%
+  prep()
+
+food_rec
+```
+
+`step_corr`: Potentially remove variables that have large absolute correlations with other variables. Even though the correlation recipe was applied, no terms were removed - implying low multicollinearity.  
+
+> Model Specification
+
+Let's begin with the specification of two models - Logistic Regression and Random Forest.
+
+```{r}
+log_spec <- logistic_reg(mode = "classification") %>%
+  set_engine("glm")
+
+rf_spec <- rand_forest(mode = "classification") %>%
+  set_engine("ranger")
+
+```
+
+Now we fit (train) the models with a juice-d version. `juice` essentially runs the preprocessing steps mentioned in the recipe, and returns us the processed variables.
+
+```{r}
+log_fit <- log_spec %>%
+  fit(americas ~ .,
+      data = juice(food_rec))
+log_fit
+
+```
+
+```{r}
+rf_fit <- rf_spec %>% 
+  fit(americas ~ .,
+      data = juice(food_rec))
+rf_fit 
+```
+
+> Model Evaluation
+
+Now to compare training results versus test results (which we have not touched up until now).
+
+Mostly for my own benefit, I list down the definitions of performance metrics that I'll be using:
+
+* **Accuracy** is the total number of correct predictions divided by the total number of predictions made for a dataset.   
+* **Precision** quantifies the number of positive class predictions that actually belong to the positive class.  
+* **Recall/Sensitivity** quantifies the number of positive class predictions made out of all positive examples in the dataset.   
+* **F-Measure** provides a single score that balances both the concerns of precision and recall in one number.   
+
+```{r}
+results_train <- log_fit %>%
+  predict(new_data = food_train) %>%
+  mutate(truth = food_train$americas) %>%
+  conf_mat(truth, .pred_class) %>%
+  summary() %>%
+  mutate(model = "log") %>%
+  bind_rows(
+    rf_fit %>%
+      predict(new_data = food_train) %>%
+      mutate(truth = food_train$americas) %>%
+      conf_mat(truth, .pred_class) %>%
+      summary() %>%
+      mutate(model = "rf")
+  )
+
+results_test <- log_fit %>%
+  predict(new_data = bake(food_rec, food_test)) %>%
+  mutate(truth = food_test$americas) %>%
+  conf_mat(truth, .pred_class) %>%
+  summary() %>%
+  mutate(model = "log") %>%
+  bind_rows(
+    rf_fit %>%
+      predict(new_data = bake(food_rec, food_test)) %>%
+      mutate(truth = food_test$americas) %>%
+      conf_mat(truth, .pred_class) %>%
+      summary() %>%
+      mutate(model = "rf")
+  )
+
+```
+
+
+```{r}
+library(patchwork) #to combine ggplots
+
+p1 <- results_train %>%
+  filter(.metric %in% c("accuracy", "precision", "recall", "f_meas")) %>%
+  ggplot(aes(.metric, .estimate, fill = model)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = round(.estimate, 2)),
+            position = position_dodge(width = 0.9), vjust = -0.5) + 
+  labs(
+    x = "Performance Metrics (Training Data)",
+    y = "Score"
+  )
+
+p2 <- results_test %>%
+  filter(.metric %in% c("accuracy", "precision", "recall", "f_meas")) %>%
+  ggplot(aes(.metric, .estimate, fill = model)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = round(.estimate, 2)),
+            position = position_dodge(width = 0.9), vjust = -0.5) + 
+  labs(
+    x = "Performance Metrics (Test Data)",
+    y = "Score"
+  )
+
+p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+```
+
+In the training results, random forest does a stellar job with close to perfect scores across these metrics.  
+
+However, in our test results, our logistic regression model handily outperforms random forest. This difference in performance could imply overfitting of the random forest model. Resampling will address this issue of overfitting.  
+
+> Resampling
+
+From Kuhn & Johnson [(2019)](http://www.feat.engineering/resampling.html), resampling methods can generate different versions of our training set that can be used to simulate how well models would perform on new data.  
+
+In each case, a resampling scheme generates a subset of the data to be used for modeling and another that is used for measuring performance. This stems from the need to understand the effectiveness of the model without resorting to the test set. Simply repredicting the training set is problematic so a procedure is needed to get an appraisal using the training set.   
+
+Here, we opt for a 10-fold cross validation data frame.  
+
+```{r}
+food_cv_folds <- food_train %>%
+  vfold_cv()
+
+food_cv_folds
+```
+
+Using our 10-fold CV data frame, we re-fit our models.  
+Subsequently, using the `collect_metrics` function, we are able to succintly summarize our specified performance metrics for both models, join them into a tibble, and use `patchwork` once again to visualize them all in a single diagram.
+
+```{r fig.width = 12, fig.height = 10}
+log_refit <- fit_resamples(
+  log_spec,
+  americas ~ .,
+  resamples = food_cv_folds,
+  control = control_resamples(save_pred = T),
+  metrics = metric_set(accuracy, f_meas, precision, recall)
+)
+
+rf_refit <- fit_resamples(
+  rf_spec,
+  americas ~ .,
+  resamples = food_cv_folds,
+  control = control_resamples(save_pred = T),
+  metrics = metric_set(accuracy, f_meas, precision, recall)
+)
+
+results_train_refit <- log_refit %>%
+  collect_metrics() %>%
+  mutate(model = "log") %>%
+  bind_rows(rf_refit %>%
+              collect_metrics() %>%
+              mutate(model = "rf"))
+
+p3 <- results_train_refit %>%
+  ggplot(aes(.metric, mean, fill = model)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = round(mean, 2)),
+            position = position_dodge(width = 0.9), vjust = -0.5) + 
+  labs(
+    x = "Performance Metrics (Training Data, Resampled)",
+    y = "Score"
+  )
+
+(p1 | p3) / p2 + 
+  plot_annotation(title = "Training vs Training (Resampled) vs Test Data",
+                  subtitle = "After resampling, overfitting is less apparent\nwith training performance metrics more closely resembling test data") +
+  plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+
+```
+
+> Conclusion
+
+I've barely explored the tip of the iceberg that is machine learning but I'm excited. There's plenty of room for improvement, especially with regards to data preprocessing via the `recipes` package and hyperparameter tuning via the `tune` package (which I skipped) - which I aim to document in future blog posts. 

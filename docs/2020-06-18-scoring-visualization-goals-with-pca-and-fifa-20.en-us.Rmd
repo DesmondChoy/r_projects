@@ -1,0 +1,736 @@
+---
+title: Scoring Visualization Goals with PCA and FIFA 20
+author: Desmond Choy
+date: '2020-06-18'
+slug: scoring-visualization-goals-with-pca-and-fifa-20.en-us
+summary: The FIFA20 player dataset is visualized using ridgeline plots and network graphs. Unsupervised machine learning (Principal Components Analysis) is also used to generate a new set of statistically independent features.
+readingtime: '16'
+tags:
+  - r
+  - EDA
+  - machine learning
+  - visualization
+coverImage: https://images.unsplash.com/photo-1544698310-74ea9d1c8258?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=1490&q=80
+thumbnailImage: https://images.unsplash.com/photo-1543351611-58f69d7c1781?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=500&q=60
+thumbnailImagePosition: left
+coverCaption: Voting By Donnycocacola
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 12,
+  fig.height = 10)
+```
+
+I came across this interesting [dataset](https://www.kaggle.com/stefanoleone992/fifa-20-complete-player-dataset) on Kaggle related to the football simulation video game **FIFA 20**, with a very detailed breakdown of attributes of over 18,000 football players. It's been a while since I've played a FIFA game, and an even longer time since I last worn my soccer boots, but this seemed like an excellent data set for some Exploratory Data Analysis. I also showcase ridgeline plots and network graphs with wrangled data, and take a stab at implementing and interpreting unsupervised machine learning in the form of Principal Components Analysis on our wide data set.
+
+# Libraries
+
+```{r libraries}
+library(tidyverse) #data wrangling
+library(fishualize) #visualization
+
+theme_set(theme_minimal())
+```
+
+# Loading The Data
+
+```{r data}
+data <- read_csv("https://raw.githubusercontent.com/DesmondChoy/glaciers/master/content/post/players_20.csv")
+glimpse(data)
+```
+
+Without a data dictionary, I went to the website where the data was scrapped from and looked into a [player's profile](https://sofifa.com/player/205632/lucas-ocampos/200046/) to make sense of the columns. Removing some columns that we won't be using, we're left with 76 columns and over 18,000 rows of data.
+
+```{r removing columns}
+data <- data %>% 
+  select(-c(player_url, real_face, ls:rb))
+
+dim(data)
+```
+
+# Data Discrepancies
+
+I note the [website](https://sofifa.com/) where the data was scrapped from has its data updated once every few days. So there might be discrepancies if you're comparing the numbers in this data set to the latest ones featured on the website.  
+
+Additionally, I was doing a little fact-checking online and some columns don't tally to real-life figures (understandably, FIFA 20 is a video game). For instance, the player with the highest release clause in real life is [Karim Benzema at GBP846m](https://www.sportbible.com/football/news-the-top-10-highest-release-clauses-in-world-football-today-20200211). In this data set however, even after accounting for currency translations, Benzema does not even appear in the top 10 list for release clauses. 
+
+```{r data discrepancies}
+
+data %>%
+  select(short_name, club, release_clause_eur, wage_eur) %>% 
+  arrange(desc(release_clause_eur))
+
+data %>%
+  select(short_name, club, release_clause_eur, wage_eur) %>% 
+  filter(str_detect(short_name, "Benzema"))
+
+```
+
+# Exploratory Data Analysis
+
+Going through the data, it looks largely sanitized. One issue I noted is that a player can be assigned to many different `player_positions`.  
+
+```{r player_positions}
+data %>% 
+  select(short_name, team_position, player_positions) %>% 
+  sample_n(10)
+```
+
+Let's clean the data further by lumping the player's position into broader categories - Goalkeeper (G), Defender (D), Defensive Midfielder (DM), Midfielder (M), Attacking Midfielder (AM), Forward (F) and Striker (ST). I'll do this by inferring from the player's `player_positions`. Fewer categories will benefit data visualization.   
+
+```{r extracting position}
+data <- data %>%
+  mutate(
+    position = case_when(
+      str_detect(player_positions, "GK") ~ "GK",
+      str_detect(player_positions, "LCB|CB|RCB|LB|RB") ~ "D",
+      str_detect(player_positions, "LWB|LDM|CDM|RDM|RWB") ~ "DM",
+      str_detect(player_positions, "LM|LCM|CM|RCM|RM") ~ "M",
+      str_detect(player_positions, "LAM|CAM|RAM") ~ "AM",
+      str_detect(player_positions, "LW|LF|CF|RF|RW") ~ "F",
+      str_detect(player_positions, "LS|ST|RS") ~ "ST"
+    )) %>% 
+  mutate(position = fct_relevel(position, "GK", "D", "DM", "M", "AM", "F", "ST"))
+```
+
+Let's check if `position` is mapped correctly. Cross referencing selected columns and using personal albeit rusty domain knowledge, it looks correct - Goalkeepers only have `gk_diving` points, Defenders have higher `defending` points relative to `shooting` and `dribbling`, and the more offensive positions like Forwards and Strikers score higher in the `shooting` category.
+
+```{r checking position extraction}
+set.seed(2020)
+#Checking if position is extracted correctly
+data %>%
+  select(short_name,
+         position,
+         player_positions,
+         shooting:dribbling,
+         gk_diving) %>%
+  sample_n(10) %>%
+  arrange(position)
+```
+
+What is the `overall` score distributed across all players? 
+
+```{r overall histogram}
+data %>% 
+  ggplot(aes(overall)) +
+  geom_histogram(binwidth = 2, fill = "#00AFBB", color="#e9ecef", alpha=0.6) +
+  labs(
+    x = "Overall Score",
+    y = "Count",
+    title = "Using A Histogram to Analyze Distribution of Overall Scores",
+    subtitle = "The Overall scores variable has a normal bell-shaped distribution, implying the players are graded on a curve",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17)
+  ) 
+
+```
+
+## Players Without Club Contracts
+
+I noticed the variables `team_position` and `team_jersey_number` have missing values. We can ascertain the relationship between both columns by counting the NAs and checking if they're equal.
+
+```{r checking NAs}
+data %>% 
+  select(contains("team")) %>% 
+  map_df(~sum(is.na(.)))
+```
+
+Why do certain players have no `team_position` ?
+
+```{r no team position}
+data %>%
+  filter(is.na(team_position)) %>%
+  select(
+    short_name,
+    club,
+    nation_position,
+    player_positions,
+    team_position,
+    team_jersey_number,
+    value_eur
+  ) %>%
+  head(10)
+```
+
+It seems these players entered the database because they represented their country but aren't contracted with any clubs. If they are good enough to represent their country, shouldn't they at least be good enough for some entry-level clubs? **As a player-manager in FIFA 20, is this an untapped pool of talent waiting to be exploited?** 
+
+Let's explore if this phenomenon is restricted to only certain geographical areas.
+
+```{r ggplot continents}
+library(countrycode)
+library(tidytext)
+
+data %>%
+  filter(is.na(team_position)) %>%
+  mutate(continent = countrycode(club,
+                                 origin = "country.name",
+                                 destination = "continent")) %>%
+  mutate(continent = replace_na(continent, "Europe")) %>%
+  add_count(club) %>%
+  mutate(club = reorder_within(club, n, continent)) %>%
+  ggplot(aes(club, n / n, fill = continent)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap( ~ continent, scales = "free_y") +
+  scale_x_reordered() +
+  scale_fill_fish_d(option = "Antennarius_commerson") +
+  labs(
+    x = "",
+    y = "",
+    title = "Continents With Highest # Of International Players With No Clubs/Contracts",
+    subtitle = "A higher percentage of players come from Africa, Americas and Europe.\nPerhaps these are countries with no well-established soccer leagues?",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  ) 
+
+```
+
+Are these players without contracts because overall performance is trailing far behind potential? Let's analyze it further across `position`.
+
+```{r geom ridge1}
+library(ggridges)
+
+data %>%
+  filter(is.na(team_position)) %>%
+  pivot_longer(overall:potential, names_to = "rating", values_to = "values") %>%
+  mutate(rating = as_factor(rating)) %>%
+  ggplot(aes(values, position, fill = rating)) +
+  geom_density_ridges(scale = 1, alpha = 0.5) +
+  scale_fill_fish_d(option = "Antennarius_commerson") +
+  theme_ridges(center_axis_labels = TRUE) +
+  labs(
+    x = NULL,
+    y = NULL,
+    fill = "Score",
+    title = "Players Without Contracts: Comparing Overall vs Potential Score Across Positions",
+    subtitle = "Not playing up to one's potential seems to be pervasive across all field positions",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.title = element_text(face = "bold", size = 15)
+  ) 
+```
+
+Testing our hypothesis if it is indeed a performance gap that is resulting in these players to be contract-less, can we then expect players with contracts to be playing much closer to their potential?
+
+```{r geom ridge2}
+data %>%
+  filter(!is.na(team_position)) %>%
+  pivot_longer(overall:potential, names_to = "rating", values_to = "values") %>%
+  mutate(rating = as_factor(rating)) %>%
+  ggplot(aes(values, position, fill = rating)) +
+  geom_density_ridges(scale = 1, alpha = 0.5) +
+  scale_fill_fish_d(option = "Antennarius_commerson") +
+  theme_ridges(center_axis_labels = TRUE) +
+  labs(
+    x = NULL,
+    y = NULL,
+    fill = "Score",
+    title = "Players With Contracts: Comparing Overall vs Potential Score Across Positions",
+    subtitle = "Ironically, the gap between overall and potential performance is even wider for players with club contracts,\nalbeit with longer right tails. This could also be due to a larger sample size.",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.title = element_text(face = "bold", size = 15)
+  ) 
+```
+
+Another way to compare performance between contracted and non-contracted players would be to use skill sets such as `pace`, `dribbling` and `shooting` that are applicable across all `position` (excluding Goalkeepers because they have their own unique skill sets such as diving).   
+
+```{r geomboxplot Players With And Without Contracts}
+labels <-
+  c("D" = "Defender",
+    "DM" = "Defensive Midfielder",
+    "M" = "Midfielder",
+    "AM" = "Attacking Midfielder",
+    "F" = "Forward",
+    "ST" = "Striker")
+
+data %>%
+  mutate(contracted = case_when(is.na(team_position) ~ "No",
+                                TRUE ~ "Yes")) %>%
+  pivot_longer(pace:physic, names_to = "skills", values_to = "values") %>%
+  filter(!position == "GK") %>%
+  mutate(skills = reorder_within(skills, values, position)) %>%
+  ggplot(aes(values, skills, fill = contracted)) +
+  geom_boxplot() +
+  geom_text(
+    data = . %>%
+      group_by(position, skills) %>%
+      mutate(percentile = values > quantile(values, 0.99999, na.rm = TRUE)) %>%
+      filter(percentile == 1),
+    aes(label = paste(short_name, "\n", str_wrap(club, width = 15), sep = ""), colour = position),
+    size = 3,
+    check_overlap = TRUE,
+    fontface = "bold",
+    vjust = "inward", hjust = "inward",
+    show.legend = F
+  ) +
+  facet_wrap( ~ position, scales = "free_y", labeller = as_labeller(labels)) +
+  scale_y_reordered() +
+  scale_colour_fish_d(option = "Antennarius_commerson") +
+  scale_fill_fish_d(option = "Hypsypops_rubicundus") +
+  labs(
+    x = "Values",
+    y = "Skills",
+    fill = "Under Contract?",
+    title = "Players With And Without Contracts In FIFA 20 - How Do They Compare?",
+    subtitle = "Using traits like dribbling, passing and shooting, players with only international appearances and\nno club contracts don't appear to be less skilled.\nHowever there are significantly more outliers among players with contracts.\nThe extreme outliers and their clubs are highlighted.",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.title = element_text(face = "bold", size = 15),
+    legend.position = "top"
+  ) 
+```
+
+Using boxplots to identify medians, variance and outliers, I conclude that there are other reasons other than overall score and generic skills driving the non-contractual state of these players.  
+
+Take for example Defenders - we want a higher defending score and the median for non-contract players is higher than players with contracts. Similarly, the median for passing scores is higher for non-contract players, and the same can be said for shooting scores for Forwards and Strikers.  
+
+One other thing you might have observed is that there are significantly more outliers for contracted players. The *crème de la crème*, so to speak.
+
+## What Makes A Player Stand Out From The Crowd?
+
+Two columns, `player_tags` and `player_traits`, contain text descriptions of certain players' characteristics e.g. Playmaker, Acrobat, etc, and popular traits e.g. Crowd Favourite, Beat Offside Trap, Argues with Officials, etc.
+
+```{r player tags and traits}
+data %>%
+  select(short_name, club, position, player_tags, player_traits) %>% 
+  na.omit() %>% 
+  sample_n(10)
+```
+
+We can visualize the relationship between tags and traits using a network graph. First we have to wrangle our data into a long format using `separate` and `pivot_longer`, remove the tag "CPU AI Only", and use `pairwise_cor` to find pairwise correlation across the words as that will form the basis of our network graph.
+
+```{r pairwise corr}
+library(widyr)
+library(igraph)
+library(ggraph)
+
+corr <- data %>%
+  select(short_name, club, position, player_tags, player_traits) %>%
+  separate(player_tags, paste("tag", 1:10, sep = ""), sep = ", ") %>%
+  separate(player_traits, paste("trait", 1:8, sep = ""), sep = ", ") %>% 
+  pivot_longer(tag1:trait8, names_to = "tag", values_to = "description", values_drop_na = T) %>%
+  mutate(description = str_replace(description, "#", "")) %>% 
+  filter(!str_detect(description, "CPU AI Only")) %>% 
+  group_by(description) %>% 
+  filter(n() > 100) %>% 
+  pairwise_cor(description, short_name, sort = TRUE)
+
+corr
+```
+
+Tidy Text Mining with R has a [great tutorial](https://www.tidytextmining.com/ngrams.html#counting-and-correlating-among-sections) on how to construct network graphs.
+
+> The igraph package has many powerful functions for manipulating and analyzing networks. One way to create an igraph object from tidy data is the `graph_from_data_frame()` function, which takes a data frame of edges with columns for "from", "to", and edge attributes.   
+
+```{r network graph}
+set.seed(2020)
+
+corr %>%
+  filter(correlation > .03) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    fontface = "bold",
+    vjust = -1,
+    hjust = -0.2
+  ) +
+  labs(
+    title = "Visualizing Correlation Of Players' Tags and Traits With A Network Graph",
+    subtitle = "Crowd favourites tend to be selfish acrobats that excel at beating offside traps and arguing with officials\nDoes any particular player come to mind?",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+    theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  ) 
+```
+
+## Do Soccer Players Age Like Wine?
+
+To investigate a player's score as the years fly by, we bucket age into two categories - before and after twenty five (mean age is 25.3 years), and use `ggscatmat()` against variables such as `value_eur`, `wage_eur`, `overall` and `potential`. This gives a scatterplot matrix with density plots on the diagonal and correlation printed in the upper triangle.   
+
+```{r ggscatmat, cache=TRUE}
+library(GGally)
+
+data %>%
+  mutate(
+    age_segment = case_when(
+      age < 23 ~ "Age<23",
+      between(age, 23, 25) ~ "Age 23-25",
+      between(age, 26, 29) ~ "Age 26-29",
+      TRUE ~ "Age>29"
+    )
+  ) %>%
+  select(age, value_eur, wage_eur, overall, potential, age_segment) %>%
+  ggscatmat(columns = 1:5, color = "age_segment") +
+  scale_color_fish_d(option = "Antennarius_commerson") +
+  labs(title = "Players Aged <23 +ve Correlated With Higher Value/Wages/Overall Score",
+       subtitle = "Beyond 29 years of age, we start to see negative correlation",
+       color = "Age Segment",
+       caption = "Source: FIFA 20 Complete Player Data Set") +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    legend.title = element_text(face = "bold")
+  ) 
+```
+
+There is some positive correlation observed between players aged 23 and younger and their associated `value_eur`, `wage_eur` and `overall` score. Conversely, beyond 29 years of age, we observe some negative correlation too between `age` and `value_eur`, `wage_eur` and `overall` score.   
+
+This isn't too surprising as the average retirement age of a football player is said to be [35 years old](https://www.thepfa.com/equalities/commitment-to-all/age#:~:text=Age,player%20is%2035%20years%20old), according to the Professional Footballers' Association.
+
+## Bargain Hunting At Clubs
+
+Information about the biggest and richest clubs are easily available online and buying a star player from any of those clubs would easily cost a fortune. **What I reckon could be more interesting is identifying clubs by a metric I call `pot_per_dollar`: A player's `potential` score divided by his current `value_eur`**. Summing all of the players, we get the club's `pot_per_dollar`.  
+
+Clubs with the highest `pot_per_dollar` are great for bargain hunting because there is a good chance to find high potential players with a cheap asking price that you could snap up. We can further segment our data by continent to address geographical-related transfer constraints, if any.
+
+```{r continents}
+#adding continents
+geography <- data %>%
+  mutate(continent = countrycode(nationality,
+                                 origin = "country.name",
+                                 destination = "continent")) %>%
+  #place Brexit countries back into Europe
+  mutate(continent = replace_na(continent, "Europe"))
+
+geography %>% 
+  select(short_name, club, nationality, continent) %>% 
+  sample_n(10)
+```
+
+```{r pot_dollar}
+#identify the clubs with the highest potential per wage dollar paid
+list <- geography %>%
+  #remove players with no clubs and no wages paid, and some players with 0 value
+  filter(!is.na(team_position),
+         value_eur > 0) %>%
+  select(short_name, club, potential, value_eur, nationality, continent) %>% 
+  #each player's potential per dollar of wages paid. Higher is better.
+  mutate(pot_per_dollar = potential / value_eur) %>%
+  group_by(club) %>% 
+  summarise(total_pot = sum(pot_per_dollar)) %>% 
+  arrange(desc(total_pot)) %>% 
+  head(20)
+
+geography %>%
+  #filter data set for clubs in list
+  filter(club %in% list$club,
+         value_eur > 0) %>%
+  select(short_name, club, potential, value_eur, nationality, continent) %>%
+  mutate(
+    pot_per_dollar = potential / value_eur,
+    club = fct_reorder(club, pot_per_dollar, .fun = sum)
+  ) %>%
+  ggplot(aes(club, pot_per_dollar)) +
+  geom_col(aes(fill = continent)) +
+  coord_flip() +
+  scale_fill_fish_d(option = "Antennarius_commerson") +
+  labs(
+    x = "Club",
+    y = "Club's Total Potential Per Value",
+    fill = "Continent",
+    title = "Bargain Hunting: Clubs With High Potential Players At Lowest Prices",
+    subtitle = "Sorted by this metric, we can see promising clubs can be found in Asia and Europe leagues.",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.title = element_text(face = "bold")
+  ) 
+```
+
+## Principal Components Analysis
+
+`tidymodels` allows for seamless and fuss-free Principal Components Analysis (PCA) implementation, and this wide data set is great with nearly 40 variables.  
+
+As the webpage reference for [recipes::step_pca()](https://recipes.tidymodels.org/reference/step_pca.html) describes it:
+
+> Principal component analysis (PCA) is a transformation of a group of variables that produces a new set of artificial features or components. These components are designed to capture the maximum amount of information (i.e. variance) in the original variables. Also, the components are statistically independent from one another. This means that they can be used to combat large inter-variables correlations in a data set.
+
+We first load the `tidymodels` meta package, then filter players with no teams and all goalkeepers (they have a separate skill set), followed by selecting of columns. Let's also segment `age` per its quantiles and use it as variables for PCA.
+
+```{r age quantiles}
+library(skimr)
+
+geography$age %>% 
+  skim()
+```
+
+
+```{r recipe}
+library(tidymodels)
+
+pca_rec <- geography %>%
+  filter(!is.na(team_jersey_number), !position == "GK") %>%
+  mutate(age_segment = case_when(
+      age < 23 ~ "Age<23",
+      between(age, 23, 25) ~ "Age 23-25",
+      between(age, 26, 29) ~ "Age 26-29",
+      TRUE ~ "Age>29")) %>%
+  select(
+    #identifiers
+    sofifa_id, short_name, long_name, club, value_eur,
+    #categorical
+    preferred_foot, position, continent, age_segment,
+    #numeric
+    overall:potential, team_jersey_number, skill_moves,
+    pace:physic, attacking_crossing:defending_sliding_tackle
+  ) %>%
+  recipe( ~ .) %>%
+  update_role(sofifa_id, short_name, long_name, club, value_eur, new_role = "id") %>%
+  step_dummy(preferred_foot, position, continent, age_segment) %>%
+  step_normalize(all_predictors()) %>%
+  step_pca(all_predictors())
+```
+
+Note that we did not define an outcome/response in our `recipe()` function, so this is unsupervised learning. Our recipe contains:
+
+* `update_role()` is used to indicate variables that should not be included when executing pre-processing with `prep()` later on, and that these variables are only included as identifiers.
+* Because PCA only takes in numeric data, we convert our categorical data to numbers with `step_dummy()`, which converts nominal data (e.g. character or factors) into one or more numeric binary model terms for the levels of the original data.
+* PCA is sensitive to outliers so `step_normalize()` essentially scales and centers all numeric variables to have a standard deviation of one and a mean of zero.
+* Finally, `step_pca()` implements Principal Component Analysis.
+
+The recipe only begins executing the pre-processing steps after we run `prep()`.
+
+```{r prep}
+pca_prep <- pca_rec %>% 
+  prep()
+
+pca_prep
+```
+
+We can use `tidy()` to extract our PCA results in a convenient tidy format which we can then subsequently visualize.
+
+```{r visual high-level}
+#tidy(df,3) lets us extract the third recipe step i.e. step_pca
+tidied_pca <- tidy(pca_prep, 3)
+
+tidied_pca %>%
+  filter(component %in% paste0("PC", 1:4)) %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(value, terms, fill = terms)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap( ~ component, nrow = 1) +
+  scale_fill_fish_d(option = "Antennarius_commerson") +
+  labs(
+    x = "Value",
+    y = "Traits",
+    fill = "",
+    title = "PCA: A High-Level Overview Of The First Four Features Created",
+    subtitle = NULL,
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15)
+  ) 
+```
+
+Let's dive deeper into the top 15 traits that defines each of these four features.
+
+```{r visual deep-dive}
+tidied_pca %>%
+  filter(component %in% paste0("PC", 1:4)) %>%
+  group_by(component) %>%
+  top_n(20, abs(value)) %>%
+  ungroup() %>%
+  mutate(terms = reorder_within(terms, abs(value), component)) %>%
+  ggplot(aes(abs(value), terms, fill = value > 0)) +
+  geom_col() +
+  facet_wrap(~component, scales = "free_y") +
+  scale_y_reordered() +
+  scale_fill_fish_d(option = "Antennarius_commerson") +
+  labs(
+    x = "Absolute Value of Contribution",
+    y = NULL, 
+    fill = "Positive?",
+    title = "PCA: Visualizing The First Four Features (PC1-PC4) Created",
+    subtitle = "Interpretation: As PC1 gets more negative, it captures offensive midfielder/playmaker traits;\nPC3: Hallmarks of a classic striker (strength, finishing, shooting) vs Movement/Agility traits",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.title = element_text(face = "bold")
+  ) 
+```
+
+Below is my interpretation for PC1-PC4:
+
+* PC1: Negative indicates offensive midfielder / [playmaker](https://en.wikipedia.org/wiki/Playmaker) traits
+* PC2: Negative indicates defender / defensive midfielder traits
+* PC3: Striker traits (+ve) versus defenders with high movement-related traits (-ve)
+* PC4: Passing-related traits (+ve) versus finesse-related traits (-ve)
+
+Now let's assess how accurate our PCA features are by visualizing the most valuable players against our features.
+
+```{r top50 most valuable, fig.width = 18, fig.height = 15}
+#Getting our top 50 valuable players ex GKs
+valuable <- geography %>%
+  filter(!is.na(team_jersey_number),
+         !position == "GK") %>%
+  arrange(desc(value_eur)) %>% 
+  select(long_name) %>% 
+  slice(1:100)
+
+juice(pca_prep) %>%
+  filter(long_name %in% valuable$long_name) %>%
+  left_join(geography %>% select(sofifa_id, position)) %>% 
+  ggplot(aes(PC1, PC3, label = paste(
+    short_name, " ", "(", str_wrap(club, width = 20), ")", "\n", "EUR", value_eur/1000000, "m", sep = ""))) +
+  geom_point(aes(color = position), alpha = 0.75, size = 5) +
+  geom_text(
+    check_overlap = TRUE,
+    vjust = "inward",
+    hjust = "inward",
+    size = 4,
+    fontface = "bold") +
+  scale_colour_fish_d(option = "Hypsypops_rubicundus") +
+  scale_x_continuous() +
+  labs(
+    x = "PC1",
+    y = "PC3",
+    color = "Position",
+    title = "FIFA 20: Top 100 Most Valuable Soccer Players (ex GKs) Mapped Against PC1 and PC3",
+    subtitle = "Offensive midfielders/playmakers are towards the left, defenders are mapped towards the right,\nStrikers can be found towards the top, while defensive roles with high movement scores are towards the bottom.",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    legend.title = element_text(face = "bold"),
+    legend.position = "top"
+  ) 
+```
+
+To my knowledge it looks like the positions are mapped out fairly accurately. Well-known players such as Messi, Ronaldo and Neymar have dazzled the world with their dribbling and shooting - and have been aptly mapped towards the left most of this chart.
+
+Revisiting our bargain hunting theme, let's run PCA on the top 100 players with the highest `pot_per_dollar`.
+
+```{r top50 pot_dollar, fig.width = 18, fig.height = 15}
+pot_dollar <- geography %>% 
+  filter(!is.na(team_jersey_number),
+         !position == "GK",
+         value_eur > 0) %>% 
+  mutate(pot_per_dollar = potential / value_eur) %>% 
+  arrange(desc(pot_per_dollar)) %>% 
+  select(long_name, pot_per_dollar) %>% 
+  slice(1:100)
+
+juice(pca_prep) %>%
+  filter(long_name %in% pot_dollar$long_name) %>%
+  left_join(geography %>% select(sofifa_id, position)) %>% 
+  ggplot(aes(PC1, PC3, label = paste(
+    short_name, " ", "(", str_wrap(club, width = 20), ")", "\n", "EUR", value_eur/1000, "k", sep = ""))) +
+  geom_point(aes(color = position), alpha = 0.75, size = 5) +
+  geom_text(
+    check_overlap = TRUE,
+    hjust = "left",
+    size = 4,
+    fontface = "bold"
+  ) +
+  scale_colour_fish_d(option = "Hypsypops_rubicundus") +
+  labs(
+    x = "PC1",
+    y = "PC3",
+    color = "Position",
+    title = "FIFA 20: Top 100 Soccer Players (ex GKs) With The Highest Potential Per Value Dollar",
+    subtitle = "Note: x-axis has shifted significantly from the previous chart, with PC1 indicating a selection bias towards players with defensive traits.",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    legend.title = element_text(face = "bold"),
+    legend.position = "top"
+  ) 
+```
+
+First and foremost, what's interesting about this chart is the x-axis. Our previous Top 50 Most Valuable Players chart had a strong bias towards negative PC1 values (players with offensive traits), while our current chart has a strong bias towards positive PC1 values(players with defensive traits) and we consequently see significantly more defenders showing up.  
+
+Finally, recall PC2 was the feature created that was tilted towards defender / defensive midfielder traits. Let's pick four of the defenders located furthest to the right and map PC2 components against their strongest traits.
+
+```{r gghighlight}
+library(gghighlight)
+
+PC2 <- tidied_pca %>%
+  filter(component == "PC2") %>%
+  top_n(15, abs(value))
+
+geography %>%
+  filter(str_detect(short_name, "T. French|Y. Fujita|A. Bennett|J. McCombe")) %>%
+  select(
+    short_name, club, player_positions, position,
+    overall:potential, pace:physic,attacking_crossing:defending_sliding_tackle
+  ) %>%
+  pivot_longer(
+    c(overall:potential, pace:physic, attacking_crossing:defending_sliding_tackle),
+    names_to = "traits",
+    values_to = "scores"
+  ) %>%
+  group_by(short_name) %>% 
+  top_n(20, scores) %>% 
+  ungroup() %>% 
+  ggplot(aes(reorder_within(traits, scores, short_name), scores)) +
+  geom_col(aes(fill = short_name), show.legend = F) +
+  gghighlight(traits %in% PC2$terms, calculate_per_facet = T) +
+  coord_flip() +
+  facet_wrap(~ short_name, scales = "free_y") +
+  scale_x_reordered() +
+  scale_fill_fish_d(option = "Antennarius_commerson") +
+  labs(
+    x = "Traits",
+    y = "Scores",
+    title = "How Does PC2 Components Map Onto These Four Defenders' Top Traits?",
+    subtitle = "Not surprisingly, the top PC2 components are featured strongly across all four players' traits",
+    caption = "Source: FIFA 20 Complete Player Data Set"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  ) 
+```
+
+I think there are plenty of questions that warrant further investigation here, and personally this blog post really made me appreciate PCA and the intuition it brings. It's been one of my long-time visualization goals to use network graphs and ridgeline plots, and its great to be able to add them to my EDA toolkit. A big shout-out to Wen Hao for spotting some errors in my initial charts!

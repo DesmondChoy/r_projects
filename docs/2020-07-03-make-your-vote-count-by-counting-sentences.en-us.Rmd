@@ -1,0 +1,506 @@
+---
+title: Make Your Vote Count By Counting Sentences
+author: Desmond Choy
+date: '2020-07-03'
+slug: make-your-vote-count-by-counting-sentences.en-us
+summary: Singapore political manifestos are categorized using NLP. The results are fed into an interactive html table that allows for convenient sorting and filtering.
+readingtime: '11'
+tags:
+  - r
+  - visualization
+  - NLP
+coverImage: https://images.unsplash.com/photo-1591064801314-b928e828041c?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=1489&q=80
+thumbnailImage: https://images.unsplash.com/photo-1534293230397-c067fc201ab8?ixlib=rb-1.2.1&auto=format&fit=crop&w=634&q=80
+thumbnailImagePosition: left
+coverCaption: Parliament of Singapore By Steven Lasry
+output:
+  blogdown::html_page:
+    toc: true
+---
+
+# Singapore General Elections 2020
+
+With [election fever](https://sg.news.yahoo.com/ge-2020-singapore-parliament-dissolved-paving-way-for-general-election-081602263.html) heating up, political parties have been releasing their manifestos to share campaign promises and educate the uninitiated on how policies *should* be made. With all 93 elected seats in Parliament organised into 14 Single Member Constituencies (SMCs) and 17 Group Representation Constituencies (GRCs) being contested by 11 political parties, I wanted to create an interactive data table that consolidated all manifestos and would make it convenient for voters to compare policies and issues across different parties.  
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 12,
+  fig.height = 10)
+
+setwd("C:\\Users\\Desmond\\Documents\\GitHub\\glaciers\\content\\post")
+```
+
+## Libraries
+
+```{r libraries}
+library(tidyverse)
+library(tidytext)
+library(pdftools)
+library(fishualize)
+
+theme_set(theme_minimal())
+```
+
+## Cleaning Individual Manifestos
+
+These manifestos are listed in the order which I managed to obtain their PDFs. A big thank you to [Ariel P](https://drive.google.com/drive/folders/1AkOJuNInhcASVQ2LWwqrBH3Uclyr3HU8) who consolidated all the PDFs in one Google Drive folder, and Kirsten Han of [*we, the citizens*](https://wethecitizens.substack.com/p/ge2020-manifestos-manifestos-manifestos) for flagging out the folder to her readers.  
+
+```{r wp}
+#1 page per row
+wp_df <- pdf_text("wp.pdf") %>%
+  as_tibble() %>%
+  mutate(page = row_number(),
+         party = "WP") 
+```
+
+Let's check if the data is correctly extracted.
+
+```{r check wp}
+wp_df %>% 
+  slice(sample(1:length(page), 1)) %>% 
+  select(page, value) %>% 
+  unnest_tokens(sentence, value, 
+                token = "sentences",
+                to_lower = FALSE) %>% 
+  head()
+```
+
+* RP's manifesto is the shortest by far, with no social media links, no introduction, and just one image of its party logo. 
+* [SDA's manifesto](https://drive.google.com/file/d/17Rn0NnGUXWeJXcjcyoa0UDDOmfCLu8Pn/view) comprised of only images and figuring how to convert images to text accurately could be a herculean task, so I opted for [a summary of their manifesto](https://www.onlinecitizenasia.com/2020/06/30/singapore-democratic-alliance-issues-elections-manifesto-ahead-of-pasir-ris-punggol-grc-contest/) from The Online Citizen instead. 
+* PPP's manifesto can only be found on a [Facebook post](https://www.facebook.com/peoplespowerpartysg/posts/3997120926995772?__xts__[0]=68.ARD01SqwXQBRgXSzdg3ng9Wto2VkmXHqAqbhUhcPxdZDmYUr-oXsk72wrvJynOsN-Z4OdAGtTHmemCUPkIRoo2JDjch6dupC0gGX18JxYyh9HGuwQzTrXqub0MolpwPmbvoeK_WmqTX9I0hvbc_hiaPd2CvWqnEZig4ZE7_Gs72CrkDHmeWS2CDlqfNvhdVkSv4NXkyWsr6Hf35xFR_53PbyxmmnI0xqQMPLu9XcHGbgeDsWYycOR_TM6JclmWP5nu2-kLv4prcGvkfboSkTqs4um8d_0f_GRyquwiSUUrNi9edprz0Z_k4C5K9rGJs0dyvUEHWHG17kWPN1QbnGtw&__tn__=-R), and I've opted to use a summary of his manifesto from [The Independent](http://theindependent.sg/ppp-leader-goh-meng-sengs-manifesto-focuses-on-macpherson/).
+
+As of 2nd July, I'm unable to find any manifesto from Peoples Voice.
+
+```{r rp spp nsp sda ppp}
+rp_df <- pdf_text("rp.pdf") %>%
+  as_tibble() %>%
+  mutate(page = row_number(),
+         party = "RP") 
+
+spp_df <- pdf_text("spp.pdf") %>%
+  as_tibble() %>%
+  mutate(page = row_number(),
+         party = "SPP") 
+
+nsp_df <- pdf_text("nsp.pdf") %>%
+  as_tibble() %>%
+  mutate(page = row_number(),
+         party = "NSP") 
+
+sda_df <- pdf_text("sda.pdf") %>%
+  as_tibble() %>%
+  mutate(page = row_number(),
+         party = "SDA") 
+
+ppp_df <- pdf_text("ppp.pdf") %>%
+  as_tibble() %>%
+  mutate(page = row_number(),
+         party = "PPP") 
+```
+
+PAP, PSP and RDU's manifestos requires more data wrangling because of the column formatting and bullet points in it. We can't use `pdf_text()` as we did above because it doesn't seem to extract bullet points well, but `pdf_data()` does a good job at it. The caveat is, we don't get a clean one-page-a-row format as we do with `pdf_text()`, so we have to run `unnest_tokens()` twice (intuition detailed in code). More details on `unnest_tokens()` can be found in my previous [blog post](https://desmondchoy.netlify.app/2020/05/hip-hop-lyrics-be-flowin-with-tidy-text-mining/))
+
+```{r pap psp rdu}
+pap_df <- pdf_data("pap.pdf") %>% 
+  #map page number
+  imap(., ~.x %>% mutate(page = .y)) %>% 
+  #combine all lists
+  reduce(bind_rows) %>% 
+  select(page, text) %>% 
+  #convert it to one-sentence-per-row
+  unnest_tokens(sentence, text,
+              token = "sentences",
+                to_lower = FALSE) %>% 
+  #convert bullet points to standalone sentence
+  unnest_tokens(sentence, sentence,
+                token = "regex",
+                to_lower = FALSE,
+                pattern = "\\.|\\:|\\u00B7|\\u2022") %>% 
+  mutate(party = "PAP") %>% 
+  select(sentence, page, party)
+
+psp_df <- pdf_data("psp.pdf") %>% 
+  imap(., ~.x %>% mutate(page = .y)) %>% 
+  reduce(bind_rows) %>% 
+  select(page, text) %>% 
+  unnest_tokens(sentence, text,
+                token = "sentences",
+                to_lower = FALSE) %>% 
+  unnest_tokens(sentence, sentence,
+                token = "regex",
+                to_lower = FALSE,
+                pattern = "\\.|\\:|\\u00B7|\\u2022") %>% 
+  mutate(party = "PSP") %>% 
+  select(sentence, page, party)
+
+rdu_df <- pdf_data("rdu.pdf") %>% 
+  imap(., ~.x %>% mutate(page = .y)) %>% 
+  reduce(bind_rows) %>% 
+  select(page, text) %>% 
+  unnest_tokens(sentence, text,
+                token = "sentences",
+                to_lower = FALSE) %>% 
+  unnest_tokens(sentence, sentence,
+                token = "regex",
+                to_lower = FALSE,
+                pattern = "\\.|\\:|\\u00B7|\\u2022") %>% 
+  mutate(party = "RDU") %>% 
+  select(sentence, page, party)
+```
+
+Consolidating SDP's manifesto required significant subjectivity and discretion. It seems the only way to obtain a consolidated manifesto is to pay $42 for a [hardcopy book](https://yoursdp.org/store/the-way-forward).   
+
+So I resorted to visiting to [their website](https://yoursdp.org/policies), saving each of those 10 pages as PDFs, and combining them. I also note a lot of their pages are rather dated and written over a year ago.
+
+```{r sdp wrangling, include = FALSE, eval=FALSE}
+pdf_combine(paste("sdp", 1:10, ".pdf", sep = ""), output = "sdp.pdf")
+```
+
+```{r sdp}
+sdp_df <- pdf_data("sdp.pdf") %>% 
+  imap(., ~.x %>% mutate(page = .y)) %>% 
+  reduce(bind_rows) %>% 
+  select(page, text) %>% 
+  unnest_tokens(sentence, text,
+                token = "sentences",
+                to_lower = FALSE) %>% 
+  unnest_tokens(sentence, sentence,
+                token = "regex",
+                to_lower = FALSE,
+                pattern = "\\.|\\:|\\u00B7|\\u2022") %>% 
+  mutate(party = "SDP") %>% 
+  select(sentence, page, party)
+```
+
+## Manifesto United
+
+The next step is to combine all manifestos extracted by `pdf_text()`, followed by combining with the ones extracted by `pdf_data()`.   
+
+We run `unnest_tokens()` on the first set of PDFs. The idea is to **break down our current data which is organized as one-page-per-row, into one-sentence-per-row.** By doing that, we focus our analysis to extract meaning behind each sentence (more on that later), and we also get to keep the page number to cross-reference against the actual document.
+
+```{r combination}
+manifestos <- wp_df %>% 
+  bind_rows(list(rp_df, spp_df, nsp_df, sda_df, ppp_df)) %>% 
+  unnest_tokens(sentence, value,
+                token = "sentences",
+                to_lower = FALSE) 
+```
+
+Now that all manifestos are one-sentence-per-row, accounting for bullet points, we can proceed to merge the rest.
+
+```{r}
+manif_df <- manifestos %>% 
+  bind_rows(list(pap_df, sdp_df, psp_df, rdu_df))
+
+manif_df
+```
+
+# Analysis
+
+## Don't Judge A Manifesto By Its Length
+
+Can we gauge the level of detail and amount of discourse within each manifesto by counting the number of sentences and using it as a proxy?
+
+```{r counting sentence}
+manif_df %>% 
+  count(party, sort = TRUE)
+```
+
+This method is a little too simplistic. Recall that for bullet point-heavy PDFs, we broke down each bullet point into its own sentence and, as a consequence, [white spaces](https://en.wikipedia.org/wiki/Whitespace_character) were created and also treated as a standalone sentence. Counting sentences alone to gauge the level of detail in each manifesto would inflate the sentence count of bullet-point heavy PDFs.
+
+```{r}
+pap_df %>% 
+  mutate(length = str_count(sentence)) %>% 
+  arrange(length)
+```
+
+Additionally, this method only takes into account unstructured text information - parties like PAP have supplemented their manifesto heavily with videos which contain valuable policy information. Charts and visualization featured within the manifestos are also not picked up.  
+
+That being said, for WP's manifesto the word count is a good proxy for the timeliness and level of detail it provides in its manifesto, given the entire PDF was released recently but with no charts nor visualization (unfortunately).
+
+## Categorically Speaking
+
+A more accurate way to gauge both **depth and width of detail** would be to categorize sentences, which would also involve counting. The idea is broad topics can be identified by picking out certain words in each sentence that are often used in context. For instance, to identify discussions related to `Governance`, one could search for key words such as *constituencies*, *parliament*, and *transparen* (not a typo since it picks up both *transparent* and *transparency*). I came up with ten broad categories, with remaining sentences classified as `Others`.
+
+```{r categories}
+categories <- manif_df %>% 
+  #transform all sentences to lower case
+  mutate(lower = str_to_lower(sentence)) %>% 
+  #removing content pages
+  filter(!str_detect(lower, "(?i)content")) %>% 
+  mutate(topic = case_when(
+    str_detect(lower, "\\bgst\\b|\\btax\\b|poverty|\\bpoor\\b|assistance|senior|\\belder|silver|retire|subsidy|subsidies|\\bage\\b|\\baged\\b|disabled|disabilities|\\bchild|\\bcost of living\\b|\\bsocial") ~ "Social Mobility",
+    str_detect(lower, "employ|\\bjob.?\\b|\\bwage|\\bwork\\b|\\bworker\\b|skillsfuture|retrench|labour|salary|\\bpmet") ~ "Labour",
+    str_detect(lower, "\\beconom|\\bsme\\b|\\brent\\b|growth|enterprise|\\bgdp\\b|business|\\bindust") ~ "Economy",
+    str_detect(lower, "\\bhdb|\\bflat|housing|\\blease|\\brental|\\bsers\\b|bloc\\b|cpf|payout|withdraw") ~ "CPF/Housing",
+    str_detect(lower, "education|class size|\\bmoe\\b|student|school|learning|kindergarten|universit") ~ "Education",
+    str_detect(lower, "constituencies|parliament|government|\\belection|\\bminist|president|independen|\\bvot|transparen|democracy|isa|\\binternal security") ~ "Governance",
+    str_detect(lower, "healthcare|\\bchas\\b|polyclinic|hospital|\\bdrug|patient|medisave|medishield|\\bmedic|insurance") ~ "Healthcare",
+    str_detect(lower, "\\blibert|gender|freedom|pofma|\\brights|\\bdiversity|assembly") ~ "Civil Liberties",
+    str_detect(lower, "climate|\\benergy|\\bgreen|\\bcarbon|\\bsolar|renewable|emissions|electric|\\bparis\\b|pollution") ~ "Climate Change",
+    str_detect(lower, "covid.?\\d+?|post-covid|disease|outbreak|pandemic") ~ "Covid-19",
+    TRUE ~ "Others")
+  ) %>%
+  select(party, topic, sentence, page)
+
+set.seed(123)
+categories %>% 
+  filter(!topic == "Others") %>% 
+  sample_n(3) %>% 
+  t()
+```
+
+To be clear, this is a general indication of **the frequency political issues are discussed**, and not necessarily an indication of the number of concrete suggestions the party makes i.e. this picks up rhetoric, references, etc.    
+
+I acknowledge such classifications are far from perfect due to the complexity and nuances of the English language. For instance, consider this sentence below. My classification labels this sentence as a `Social Mobility` topic because of the word *age*, where policies to address income inequality are often targeted at certain segments with an age caveat. However, I'd argue this sentence relates more to `Labour` since the emphasis is on self-employed people. To further complicate things, both topics do overlap.
+
+```{r english nuance}
+categories %>% 
+  filter(str_detect(sentence, "below the age of 37")) %>% 
+  t()
+```
+
+## A Quick Investigation Of Others
+
+After categorization of our sentences, there's quite a fair bit lumped into `Others`. 
+
+```{r others}
+categories %>% 
+  count(topic, sort = TRUE)
+```
+
+But that's misleading as a lot of it are white spaces and miscellaneous digits/symbols created in the process of extracting sentences and converting bullet points to sentences.   
+
+Counting each letter in each sentence (the length of a sentence can give us a clue if its meaningful or just noise), the distribution can be observed through a histogram, and quantiles derived using the `skimr` package.
+
+```{r histogram}
+categories %>%
+  filter(topic == "Others") %>%
+  #count the number of letters in each sentence
+  mutate(length = str_count(sentence)) %>%
+  ggplot(aes(length)) +
+  geom_histogram(
+    binwidth = 20,
+    fill = fish(1, option = "Cephalopholis_argus", alpha = 0.6, begin = 0.2)
+  ) +
+  labs(
+    x = "Number of Letters In Each Sentence",
+    y = "Number of Sentences",
+    title = "Analysing Sentences Categorized as \"Others\"",
+    subtitle = "A significant amount of sentences within Others contains ten letters or less"
+  ) +
+  theme(plot.title = element_text(face = "bold", size = 20),
+        plot.subtitle = element_text(size = 17)) 
+```
+
+```{r quantile}
+library(skimr)
+
+categories %>% 
+  filter(topic == "Others") %>% 
+  #count the number of letters in each sentence
+  mutate(length = str_count(sentence)) %>% 
+  skim_without_charts(length)
+```
+
+I divided `Others` by percentile (four quantiles), and sampled 5 rows from each to peek into each sentence. **The primary concern is that my search filters above aren't sufficiently classifying topics.**
+
+```{r others quantile}
+set.seed(2020)
+
+categories %>% 
+  filter(topic == "Others") %>% 
+  mutate(length = str_count(sentence),
+         percentile = as.factor(case_when(length < 4 ~ "0-25",
+                                between(length, 4, 50) ~ "26-50",
+                                between(length, 51, 102) ~ "51-75",
+                                TRUE ~ "76-100"))) %>% 
+  group_by(percentile) %>% 
+  sample_n(5) %>% 
+  slice(1:5)
+```
+
+In the first and second quantile, the sentences contain random digits separated from sentences and short soundbites. In the remaining two quantiles there are more meaningful sentences discussing infant care centres, online gambling and national security that don't quite fall into any of the prior categories. There is a sentence addressing rising global temperatures that should be classified under `Climate Change`, but for the most part I think the search filters are good enough.   
+
+# The Tables Have Turned
+
+Or rather, I have turned the data set into an interactive data table. Individual manifestos can be downloaded via the respective `Party` link, and `Page` number provided allows you to cross reference if you wish to read the sentence in its full context. If links are broken, you can find all the manifestos [here](https://github.com/DesmondChoy/DataSets).
+
+```{r table}
+library(reactable)
+library(htmltools)
+library(crosstalk)
+
+data <- SharedData$new(categories)
+links <- categories %>%
+  distinct(party) %>%
+  mutate(
+    html = paste(
+      "https://github.com/DesmondChoy/DataSets/raw/master/",
+      str_to_lower(party), ".pdf", sep = "")
+  )
+```
+
+## Interactive Table
+
+```{r interactive}
+bscols(
+  widths = c(2, 10),
+  list(
+    filter_checkbox("type", "Topic", data, ~ topic),
+    filter_checkbox("type", "Party", data, ~ party)
+  ),
+  reactable(
+    data,
+    defaultColDef = colDef(
+      headerStyle = list(background = fish(1, option = "Epinephelus_fasciatus"))
+    ),
+    columns = list(
+      sentence = colDef(name = "Search Across Manifestos", align = "center",
+                        minWidth = 175),
+      party = colDef(
+        name = "Party",
+        align = "center",
+        minWidth = 40,
+        filterable = FALSE,
+        html = TRUE,
+        cell = function(value, index) {
+          sprintf('<a href="%s" target="_blank">%s</a>', links$html[index], value)
+        }
+      ),
+      page = colDef(name = "Page", align = "center", minWidth = 40),
+      topic = colDef(name = "Topic", align = "center", filterable = FALSE)
+    ),
+    showPageSizeOptions = TRUE, 
+    pageSizeOptions = c(5, 10, 20),
+    defaultPageSize = 5,
+    filterable = TRUE,
+    minRows = 5,
+    borderless = TRUE,
+    highlight = TRUE,
+    striped = TRUE,
+    paginationType = "simple",
+    theme = reactableTheme(
+      borderColor = "#dfe2e5",
+      stripedColor = "#f6f8fa",
+      highlightColor = "#f0f5f9",
+      cellPadding = "8px 12px",
+      style = list(fontFamily = "BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif"),
+      searchInputStyle = list(width = "100%")
+    )
+  )
+)
+```
+
+# Visualization
+
+## The Best Form Of Flattery
+
+Across my selected topics, how does the manifesto of the ruling party compare against the opposition parties?
+
+```{r comparing across topic}
+library(gghighlight)
+
+comp <- categories %>%
+  filter(!topic == "Others") %>% 
+  group_by(party) %>%
+  count(topic) %>%
+  mutate(percent = round(n / sum(n) * 100, 1)) %>%
+  ungroup()
+
+comp %>%
+  mutate(party = reorder_within(party, percent, topic)) %>%
+  ggplot(aes(party, percent)) +
+  geom_col(fill = fish(1, option = "Hypsypops_rubicundus"), show.legend = FALSE) +
+  gghighlight(str_detect(party, "PAP"), calculate_per_facet = T) +
+  coord_flip() +
+  scale_x_reordered() +
+  facet_wrap(~ topic, nrow = 4, scales = "free_y") +
+  labs(
+    x = "Political Party",
+    y = "Frequency Of Topic Cited Within Own Manifesto (%)",
+    title = "How Does PAP's Manifesto Compare Against The Opposition Across Each Topic?",
+    subtitle = "In absolute terms, PAP's manifesto focuses on addressing labour and social mobility issues.\nCovid-19 was the issue PAP spent most time discussing, relatively speaking."
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  )
+```
+
+## The Prickly Issues
+
+Based on their manifestos, which are the top issues that define each political party?
+
+```{r comparing across party}
+most_discussed <- comp %>%
+  group_by(party) %>%
+  arrange(desc(percent)) %>%
+  slice(1) %>%
+  select(party, topic)
+
+set.seed(2021)
+
+quote <- categories %>%
+  right_join(most_discussed) %>%
+  mutate(length = str_count(sentence)) %>%
+  filter(between(length, 75, 175)) %>%
+  group_by(party) %>%
+  slice_sample() %>%
+  select(party, sentence)
+
+dat_text <- data.frame(party = quote$party,
+                       label = quote$sentence)
+comp %>%
+  group_by(party) %>%
+  arrange(desc(percent)) %>%
+  slice(1:5) %>%
+  ungroup() %>%
+  mutate(topic = reorder_within(topic, percent, party)) %>%
+  ggplot(aes(percent, topic)) +
+  geom_col(aes(fill = party), show.legend = FALSE) +
+  geom_text(
+    data    = dat_text,
+    mapping = aes(
+      x = 70,
+      y = 1,
+      label = paste("\"", str_wrap(label, width = 30),
+                    "\"", sep = "")
+    ),
+    hjust   = "inward",
+    vjust   = "inward",
+    size = 3,
+    fontface = "bold"
+  ) +
+  facet_wrap(~ party, scales = "free_y", nrow = 4) +
+  scale_y_reordered() +
+  scale_fill_fish_d(option = "Balistapus_undulatus") +
+  labs(
+    x = "Frequency Of Topic Cited Within Own Manifesto (%)",
+    y = "",
+    title = "Party Manifestos: Ranking Top Five Most Discussed Topics",
+    subtitle = "Social Mobility/Labour ranks as the most discussed topic across all parties,with PPP/SDA\nputting significantly more emphasis. Quotes provided relate to most discussed topic."
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  ) 
+```
+
+# Concluding Thoughts
+
+Personally, this post reinforces a lot of my prior beliefs - that the PAP (understandably, as a function of an incumbent) spends less time championing topics related to `Civil Liberties` and `Governance`, that WP's policies appear closer to the PAP's than one might think, and `CPF/Housing`, `Labour` and `Social Mobility` issues appears to be what drives votes (since every party is heavily focused on them).   
+
+I'm also heartened that `Climate Change` is one of the topics that are already being discussed, as that could be one of the most defining issues of our generation. Within the `Others` category, I'm certain that there are important issues as well that have not been picked up by my filters e.g. minority rights, gender inequality, etc. 
+
+Collecting and cleaning the data took a surprisingly long time, but was ultimately rewarding seeing sentences being (mostly) correctly classified and learning about [unicodes](https://en.wikipedia.org/wiki/Unicode) when struggling to separate bullet points. I suppose my experience does echo [surveys collected](https://blog.ldodds.com/2020/01/31/do-data-scientists-spend-80-of-their-time-cleaning-data-turns-out-no/) on time spent cleaning data.  
+
+I look forward to casting my vote and if you are based in Singapore and eligible to vote, I hope you do too. Make your vote count!
+

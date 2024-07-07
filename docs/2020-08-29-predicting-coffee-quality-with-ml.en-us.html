@@ -1,0 +1,1023 @@
+---
+title: Predicting Coffee Quality With ML
+author: Desmond Choy
+date: '2020-08-29'
+slug: predicting-coffee-quality-with-ml.en-us
+summary: Coffee quality-related data is explored and cleaned. Using the tidymodels framework, I demonstrate feature engineering, fitting of three models (LASSO, Random Forest and XGBoost), tuning of hyperparameters and analyzing out-of-sample performance.
+readingtime: '16'
+tags:
+  - EDA
+  - machine learning
+  - r
+  - tidytuesday
+  - visualization
+coverImage: https://images.unsplash.com/photo-1492158244976-29b84ba93025?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=967&q=80
+thumbnailImage: https://images.unsplash.com/photo-1497515114629-f71d768fd07c?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=1062&q=80
+thumbnailImagePosition: left
+coverCaption: Coffee By Cyril Saulnier
+output:
+  blogdown::html_page:
+    toc: true
+---
+
+
+<div id="TOC">
+<ul>
+<li><a href="#coffee-quality-ratings">Coffee Quality Ratings</a></li>
+<li><a href="#libraries">Libraries</a></li>
+<li><a href="#exploratory-data-analysis">Exploratory Data Analysis</a><ul>
+<li><a href="#distribution-of-total_cup_points">Distribution of total_cup_points</a></li>
+<li><a href="#investigating-missingness">Investigating missingness</a></li>
+<li><a href="#how-are-total_cup_points-calculated">How are total_cup_points calculated?</a></li>
+<li><a href="#correlation-of-total_cup_points">Correlation of total_cup_points</a></li>
+<li><a href="#replacing-missingness-in-altitude-data">Replacing missingness in altitude data</a><ul>
+<li><a href="#relationship-between-altitude-and-altitude_mean_meters">Relationship between altitude and altitude_mean_meters?</a></li>
+<li><a href="#missingness-of-other-altitude-columns">Missingness of other altitude columns</a></li>
+<li><a href="#standardizing-altitude-measurements-to-meters">Standardizing altitude measurements to meters</a></li>
+<li><a href="#replacing-nas">Replacing NAs</a></li>
+</ul></li>
+<li><a href="#analyzing-variety-missingness">Analyzing variety missingness</a></li>
+<li><a href="#visualizing-highest-scores-across-countries">Visualizing highest scores across countries</a></li>
+<li><a href="#finalizing-the-dataset">Finalizing the dataset</a><ul>
+<li><a href="#excluding-aromacupper_points">Excluding aroma:cupper_points</a></li>
+</ul></li>
+</ul></li>
+<li><a href="#modeling">Modeling</a><ul>
+<li><a href="#initial-split">Initial Split</a></li>
+<li><a href="#resampling">Resampling</a></li>
+</ul></li>
+<li><a href="#lasso-model">LASSO Model</a><ul>
+<li><a href="#model-specification">Model Specification</a></li>
+<li><a href="#feature-preprocessing">Feature Preprocessing</a></li>
+<li><a href="#workflows">Workflows</a></li>
+<li><a href="#hyperparameter-tuning">Hyperparameter Tuning</a></li>
+<li><a href="#training-performance-assessment">Training Performance Assessment</a></li>
+<li><a href="#finalizing-hyperparameters">Finalizing Hyperparameters</a></li>
+</ul></li>
+<li><a href="#random-forest-xgboost-models">Random Forest &amp; XGBoost Models</a><ul>
+<li><a href="#model-specification-1">Model Specification</a></li>
+<li><a href="#workflows-1">Workflows</a></li>
+<li><a href="#hyperparameter-tuning-1">Hyperparameter Tuning</a></li>
+<li><a href="#training-performance-assessment-1">Training Performance Assessment</a></li>
+<li><a href="#finalizing-hyperparameters-1">Finalizing Hyperparameters</a></li>
+</ul></li>
+<li><a href="#variable-importance">Variable Importance</a></li>
+<li><a href="#model-selection">Model Selection</a></li>
+<li><a href="#conclusion">Conclusion</a></li>
+</ul>
+</div>
+
+<div id="coffee-quality-ratings" class="section level1">
+<h1>Coffee Quality Ratings</h1>
+<p>Coffee can be a huge productivity boost and I can’t imagine working through the day without it. This data set, originally uploaded from <a href="https://github.com/jldbc/coffee-quality-database">Coffee Quality Database</a>, was re-posted to <a href="https://www.kaggle.com/volpatto/coffee-quality-database-from-cqi?select=merged_data_cleaned.csv">Kaggle</a> and subsequently featured on <a href="https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-07-07/readme.md">TidyTuesday</a>.</p>
+<p>In it, coffee from different countries are awarded cup points, scored by panelists who sample the coffee and assess it based on a number of factors such as aroma, acidity, uniformity and sweetness. But do other factors, such as country, altitude and processing method, also affect coffee quality scores?</p>
+<p>This blog post will set out to investigate the data with exploratory data analysis. Next, utilizing the <code>tidymodels</code> collection, I will create new predictors with feature engineering, and subsequently specify, tune, compare in-sample results based on RMSE for three popular machine learning models (LASSO, random forest and XGBoost). Variable importance of features will also be compared. Finally, the model that’s able to deliver the lowest out-of-sample RMSE when predicting coffee quality points will be selected.</p>
+</div>
+<div id="libraries" class="section level1">
+<h1>Libraries</h1>
+<pre class="r"><code>library(tidyverse)
+library(tidymodels)
+
+theme_set(theme_minimal())</code></pre>
+</div>
+<div id="exploratory-data-analysis" class="section level1">
+<h1>Exploratory Data Analysis</h1>
+<pre class="r"><code>coffee &lt;- readr::read_csv(&#39;https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-07-07/coffee_ratings.csv&#39;)
+
+dim(coffee)</code></pre>
+<pre><code>## [1] 1339   43</code></pre>
+<p>While not <em>big data</em>, this data set has over 1.3k rows and 43 columns! This is the <a href="https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-07-07/readme.md">data dictionary</a>, and full descriptions and examples can be <a href="https://database.coffeeinstitute.org/coffee/357789/grade">found here</a>.</p>
+<div id="distribution-of-total_cup_points" class="section level2">
+<h2>Distribution of total_cup_points</h2>
+<p>Let’s first get a sense of the distribution of <code>total_cup_points</code>, which are the rating points given to each cup of coffee on a scale of 0-100.</p>
+<pre class="r"><code>coffee %&gt;% 
+  ggplot(aes(total_cup_points)) +
+  geom_histogram(binwidth = 1, fill = &quot;#00AFBB&quot;, color=&quot;#e9ecef&quot;, alpha=0.6) +
+  labs(
+    x = &quot;Total_cup_points&quot;,
+    y = &quot;Count&quot;,
+    title = &quot;Analyzing Distribution of Coffee Quality Points: Histogram&quot;,
+    subtitle = &quot;Majority of scores are clustered between 80-90,\nwith somesignificant outliers - potentially data errors&quot;,
+    caption = &quot;Source: Coffee Quality Database&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17)
+  ) </code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/outlier-1.png" width="1152" /></p>
+<pre class="r"><code>coffee %&gt;% 
+  arrange(total_cup_points) %&gt;% 
+  head()</code></pre>
+<pre><code>## # A tibble: 6 x 43
+##   total_cup_points species owner country_of_orig~ farm_name lot_number mill 
+##              &lt;dbl&gt; &lt;chr&gt;   &lt;chr&gt; &lt;chr&gt;            &lt;chr&gt;     &lt;chr&gt;      &lt;chr&gt;
+## 1              0   Arabica bism~ Honduras         los hica~ 103        cigr~
+## 2             59.8 Arabica juan~ Guatemala        finca el~ &lt;NA&gt;       bene~
+## 3             63.1 Arabica expo~ Nicaragua        finca la~ 017-053-0~ bene~
+## 4             67.9 Arabica myri~ Haiti            200 farms &lt;NA&gt;       coeb~
+## 5             68.3 Arabica juan~ Mexico           el cente~ &lt;NA&gt;       la e~
+## 6             69.2 Arabica cade~ Honduras         cerro bu~ &lt;NA&gt;       cade~
+## # ... with 36 more variables: ico_number &lt;chr&gt;, company &lt;chr&gt;, altitude &lt;chr&gt;,
+## #   region &lt;chr&gt;, producer &lt;chr&gt;, number_of_bags &lt;dbl&gt;, bag_weight &lt;chr&gt;,
+## #   in_country_partner &lt;chr&gt;, harvest_year &lt;chr&gt;, grading_date &lt;chr&gt;,
+## #   owner_1 &lt;chr&gt;, variety &lt;chr&gt;, processing_method &lt;chr&gt;, aroma &lt;dbl&gt;,
+## #   flavor &lt;dbl&gt;, aftertaste &lt;dbl&gt;, acidity &lt;dbl&gt;, body &lt;dbl&gt;, balance &lt;dbl&gt;,
+## #   uniformity &lt;dbl&gt;, clean_cup &lt;dbl&gt;, sweetness &lt;dbl&gt;, cupper_points &lt;dbl&gt;,
+## #   moisture &lt;dbl&gt;, category_one_defects &lt;dbl&gt;, quakers &lt;dbl&gt;, color &lt;chr&gt;,
+## #   category_two_defects &lt;dbl&gt;, expiration &lt;chr&gt;, certification_body &lt;chr&gt;,
+## #   certification_address &lt;chr&gt;, certification_contact &lt;chr&gt;,
+## #   unit_of_measurement &lt;chr&gt;, altitude_low_meters &lt;dbl&gt;,
+## #   altitude_high_meters &lt;dbl&gt;, altitude_mean_meters &lt;dbl&gt;</code></pre>
+<p>There’s one outlier with zero <code>total_cup_points</code> - probably a data entry error. Let’s remove that. At the same time, there does not appear to be a unique identifier for each coffee, so let’s add that.</p>
+<pre class="r"><code>coffee &lt;- coffee %&gt;% 
+  filter(total_cup_points &gt; 0) %&gt;% 
+  mutate(id = row_number()) %&gt;% 
+  select(id, everything())
+
+coffee</code></pre>
+<pre><code>## # A tibble: 1,338 x 44
+##       id total_cup_points species owner country_of_orig~ farm_name lot_number
+##    &lt;int&gt;            &lt;dbl&gt; &lt;chr&gt;   &lt;chr&gt; &lt;chr&gt;            &lt;chr&gt;     &lt;chr&gt;     
+##  1     1             90.6 Arabica meta~ Ethiopia         &quot;metad p~ &lt;NA&gt;      
+##  2     2             89.9 Arabica meta~ Ethiopia         &quot;metad p~ &lt;NA&gt;      
+##  3     3             89.8 Arabica grou~ Guatemala        &quot;san mar~ &lt;NA&gt;      
+##  4     4             89   Arabica yidn~ Ethiopia         &quot;yidneka~ &lt;NA&gt;      
+##  5     5             88.8 Arabica meta~ Ethiopia         &quot;metad p~ &lt;NA&gt;      
+##  6     6             88.8 Arabica ji-a~ Brazil            &lt;NA&gt;     &lt;NA&gt;      
+##  7     7             88.8 Arabica hugo~ Peru              &lt;NA&gt;     &lt;NA&gt;      
+##  8     8             88.7 Arabica ethi~ Ethiopia         &quot;aolme&quot;   &lt;NA&gt;      
+##  9     9             88.4 Arabica ethi~ Ethiopia         &quot;aolme&quot;   &lt;NA&gt;      
+## 10    10             88.2 Arabica diam~ Ethiopia         &quot;tulla c~ &lt;NA&gt;      
+## # ... with 1,328 more rows, and 37 more variables: mill &lt;chr&gt;,
+## #   ico_number &lt;chr&gt;, company &lt;chr&gt;, altitude &lt;chr&gt;, region &lt;chr&gt;,
+## #   producer &lt;chr&gt;, number_of_bags &lt;dbl&gt;, bag_weight &lt;chr&gt;,
+## #   in_country_partner &lt;chr&gt;, harvest_year &lt;chr&gt;, grading_date &lt;chr&gt;,
+## #   owner_1 &lt;chr&gt;, variety &lt;chr&gt;, processing_method &lt;chr&gt;, aroma &lt;dbl&gt;,
+## #   flavor &lt;dbl&gt;, aftertaste &lt;dbl&gt;, acidity &lt;dbl&gt;, body &lt;dbl&gt;, balance &lt;dbl&gt;,
+## #   uniformity &lt;dbl&gt;, clean_cup &lt;dbl&gt;, sweetness &lt;dbl&gt;, cupper_points &lt;dbl&gt;,
+## #   moisture &lt;dbl&gt;, category_one_defects &lt;dbl&gt;, quakers &lt;dbl&gt;, color &lt;chr&gt;,
+## #   category_two_defects &lt;dbl&gt;, expiration &lt;chr&gt;, certification_body &lt;chr&gt;,
+## #   certification_address &lt;chr&gt;, certification_contact &lt;chr&gt;,
+## #   unit_of_measurement &lt;chr&gt;, altitude_low_meters &lt;dbl&gt;,
+## #   altitude_high_meters &lt;dbl&gt;, altitude_mean_meters &lt;dbl&gt;</code></pre>
+</div>
+<div id="investigating-missingness" class="section level2">
+<h2>Investigating missingness</h2>
+<p>How much missing data is in this data set?</p>
+<pre class="r"><code>coffee %&gt;% 
+  skimr::skim() %&gt;% 
+  select(skim_variable, complete_rate) %&gt;% 
+  arrange(complete_rate)</code></pre>
+<pre><code>## # A tibble: 44 x 2
+##    skim_variable        complete_rate
+##    &lt;chr&gt;                        &lt;dbl&gt;
+##  1 lot_number                   0.206
+##  2 farm_name                    0.732
+##  3 mill                         0.765
+##  4 producer                     0.827
+##  5 altitude_low_meters          0.828
+##  6 altitude_high_meters         0.828
+##  7 altitude_mean_meters         0.828
+##  8 altitude                     0.831
+##  9 variety                      0.831
+## 10 color                        0.837
+## # ... with 34 more rows</code></pre>
+<p>Most of the columns have more than 80% completeness. I’ll filter for columns with more than 70% completeness, and <code>map()</code> a <code>count()</code> across all columns to let me further investigate columns that could be of interest.</p>
+<p>In my EDA I do this for all columns but, for the sake of brevity, I’ll only <code>select</code> a few columns to illustrate the output.</p>
+<pre class="r"><code>coffee %&gt;%
+  select(owner_1:processing_method) %&gt;%
+  map(~ count(data.frame(x = .x), x, sort = TRUE)) %&gt;%
+  map(~ head(., n = 10))</code></pre>
+<pre><code>## $owner_1
+##                                                                     x   n
+## 1                                           Juan Luis Alvarado Romero 155
+## 2                                                  Racafe &amp; Cia S.C.A  60
+## 3                                      Exportadora de Cafe Condor S.A  54
+## 4                                    Kona Pacific Farmers Cooperative  52
+## 5                                                     Ipanema Coffees  50
+## 6  CQI Taiwan ICP CQI&lt;U+53F0&gt;&lt;U+7063&gt;&lt;U+5408&gt;&lt;U+4F5C&gt;&lt;U+5925&gt;&lt;U+4F34&gt;  46
+## 7                         Lin, Che-Hao Krude &lt;U+6797&gt;&lt;U+54F2&gt;&lt;U+8C6A&gt;  29
+## 8                                                            NUCOFFEE  29
+## 9                                                     CARCAFE LTDA CI  27
+## 10                                             The Coffee Source Inc.  23
+## 
+## $variety
+##                 x   n
+## 1         Caturra 255
+## 2         Bourbon 226
+## 3            &lt;NA&gt; 226
+## 4          Typica 211
+## 5           Other 110
+## 6          Catuai  74
+## 7   Hawaiian Kona  44
+## 8  Yellow Bourbon  35
+## 9      Mundo Novo  33
+## 10        Catimor  20
+## 
+## $processing_method
+##                           x   n
+## 1              Washed / Wet 815
+## 2             Natural / Dry 258
+## 3                      &lt;NA&gt; 169
+## 4 Semi-washed / Semi-pulped  56
+## 5                     Other  26
+## 6    Pulped natural / honey  14</code></pre>
+<pre class="r"><code>#what I actually do
+cols &lt;- coffee %&gt;%
+  skimr::skim() %&gt;%
+  select(skim_variable, complete_rate) %&gt;%
+  arrange(complete_rate) %&gt;%
+  filter(complete_rate &gt; 0.7) %&gt;%
+  pull(skim_variable)
+
+#what I actually do
+coffee %&gt;%
+  select(cols) %&gt;%
+  map( ~ count(data.frame(x = .x), x, sort = TRUE)) %&gt;%
+  map( ~ head(., n = 10))</code></pre>
+<p>Let’s dig further into the data before finalizing the columns.</p>
+</div>
+<div id="how-are-total_cup_points-calculated" class="section level2">
+<h2>How are total_cup_points calculated?</h2>
+<p>From <a href="https://database.coffeeinstitute.org/coffee/357789/grade">this page</a> in the Coffee Institute’s data base, it appears that <code>total_cup_points</code> is the sum of columns <code>aroma</code> to <code>cupper_points</code>.</p>
+<pre class="r"><code>coffee %&gt;% 
+  select(total_cup_points, aroma:cupper_points)</code></pre>
+<pre><code>## # A tibble: 1,338 x 11
+##    total_cup_points aroma flavor aftertaste acidity  body balance uniformity
+##               &lt;dbl&gt; &lt;dbl&gt;  &lt;dbl&gt;      &lt;dbl&gt;   &lt;dbl&gt; &lt;dbl&gt;   &lt;dbl&gt;      &lt;dbl&gt;
+##  1             90.6  8.67   8.83       8.67    8.75  8.5     8.42      10   
+##  2             89.9  8.75   8.67       8.5     8.58  8.42    8.42      10   
+##  3             89.8  8.42   8.5        8.42    8.42  8.33    8.42      10   
+##  4             89    8.17   8.58       8.42    8.42  8.5     8.25      10   
+##  5             88.8  8.25   8.5        8.25    8.5   8.42    8.33      10   
+##  6             88.8  8.58   8.42       8.42    8.5   8.25    8.33      10   
+##  7             88.8  8.42   8.5        8.33    8.5   8.25    8.25      10   
+##  8             88.7  8.25   8.33       8.5     8.42  8.33    8.5       10   
+##  9             88.4  8.67   8.67       8.58    8.42  8.33    8.42       9.33
+## 10             88.2  8.08   8.58       8.5     8.5   7.67    8.42      10   
+## # ... with 1,328 more rows, and 3 more variables: clean_cup &lt;dbl&gt;,
+## #   sweetness &lt;dbl&gt;, cupper_points &lt;dbl&gt;</code></pre>
+<p>The code below verifies just that.</p>
+<pre class="r"><code>set.seed(123)
+
+coffee %&gt;% 
+  group_by(id) %&gt;% 
+  mutate(sum = sum(across(aroma:cupper_points))) %&gt;% 
+  select(id, total_cup_points, sum) %&gt;% 
+  ungroup() %&gt;% 
+  slice_sample(1:length(id), n = 5)</code></pre>
+<pre><code>## # A tibble: 5 x 3
+##      id total_cup_points   sum
+##   &lt;int&gt;            &lt;dbl&gt; &lt;dbl&gt;
+## 1   415             83.3  83.3
+## 2   463             83.2  83.2
+## 3   179             84.4  84.4
+## 4   526             83    83.0
+## 5   195             84.2  84.2</code></pre>
+</div>
+<div id="correlation-of-total_cup_points" class="section level2">
+<h2>Correlation of total_cup_points</h2>
+<pre class="r"><code>library(GGally)
+
+coffee %&gt;% 
+  select(total_cup_points, aroma:cupper_points) %&gt;% 
+  ggcorr()</code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/correlation%20of%20total_cup_points-1.png" width="1152" /></p>
+<p>As expected, <code>total_cup_points</code> showcases positive correlation with all of underlying scores, but less so for uniformity, clean_cup and sweetness.</p>
+</div>
+<div id="replacing-missingness-in-altitude-data" class="section level2">
+<h2>Replacing missingness in altitude data</h2>
+<p>From some <a href="https://perkcoffee.co/sg/altitude-affect-taste-coffee/#:~:text=High%20altitudes%20are%20considered%20ideal,richer%2C%20and%20more%20pronounced%20flavour">googling</a>,</p>
+<blockquote>
+<p>High altitudes are considered ideal for growing the coffee plant, with cooler temperatures delaying the growth cycle. This allows the bean to go through a longer maturation process, thus creating a much fuller, richer, and more pronounced flavour.</p>
+</blockquote>
+<p>If that is indeed the case, <strong>we can expect altitude to be a significant predictor</strong>. However, upon inspecting the completeness of the altitude-related columns, around 20% of the data is missing.</p>
+<div class="figure">
+<img src="https://perkcoffee.co/sg/wp-content/uploads/sites/2/2017/10/map_1000px.jpg" alt="" />
+<p class="caption">Coffee at different altitudes</p>
+</div>
+<pre class="r"><code>coffee %&gt;% 
+  skimr::skim() %&gt;% 
+  select(skim_variable, complete_rate) %&gt;% 
+  filter(skim_variable %in% c(&quot;altitude&quot;, &quot;altitude_low_meters&quot;, &quot;altitude_high_meters&quot;, &quot;altitude_mean_meters&quot;))</code></pre>
+<pre><code>## # A tibble: 4 x 2
+##   skim_variable        complete_rate
+##   &lt;chr&gt;                        &lt;dbl&gt;
+## 1 altitude                     0.831
+## 2 altitude_low_meters          0.828
+## 3 altitude_high_meters         0.828
+## 4 altitude_mean_meters         0.828</code></pre>
+<p>Before trying to replace these missing values, let’s ask some questions:</p>
+<div id="relationship-between-altitude-and-altitude_mean_meters" class="section level3">
+<h3>Relationship between altitude and altitude_mean_meters?</h3>
+<pre class="r"><code>set.seed(123)
+
+coffee %&gt;% 
+  select(altitude, altitude_mean_meters) %&gt;% 
+  slice_sample(1:length(altitude), n = 20)</code></pre>
+<pre><code>## # A tibble: 20 x 2
+##    altitude              altitude_mean_meters
+##    &lt;chr&gt;                                &lt;dbl&gt;
+##  1 &lt;NA&gt;                                   NA 
+##  2 1800                                 1800 
+##  3 &lt;NA&gt;                                   NA 
+##  4 1600 - 1950 msnm                     1775 
+##  5 1500                                 1500 
+##  6 1400 msnm                            1400 
+##  7 1250                                 1250 
+##  8 750m                                  750 
+##  9 4300                                 1311.
+## 10 &lt;NA&gt;                                   NA 
+## 11 &lt;NA&gt;                                   NA 
+## 12 1750 msnm                            1750 
+## 13 1200                                 1200 
+## 14 934                                   934 
+## 15 800++                                 800 
+## 16 1100                                 1100 
+## 17 1130                                 1130 
+## 18 de 1.600 a 1.950 msnm                1775 
+## 19 1100                                 1100 
+## 20 1                                       1</code></pre>
+<p>It looks like <code>altitude_mean_meters</code> is a clean version of <code>altitude</code> - so I’ll focus on using `<code>altitude_mean_meters</code> for now.</p>
+</div>
+<div id="missingness-of-other-altitude-columns" class="section level3">
+<h3>Missingness of other altitude columns</h3>
+<p>When <code>altitude_mean_meters</code> is missing, are <code>altitude_low_meters</code> and <code>altitude_high_meters</code> missing too?</p>
+<pre class="r"><code>coffee %&gt;% 
+  filter(is.na(altitude_mean_meters)) %&gt;% 
+  select(contains(&quot;meters&quot;)) %&gt;% 
+  #checking for NAs
+  summarise(not_na = 
+              sum(!is.na(
+                across(everything())
+                )))</code></pre>
+<pre><code>## # A tibble: 1 x 1
+##   not_na
+##    &lt;int&gt;
+## 1      0</code></pre>
+<p>Yes, we can expect <code>altitude_low_meters</code> and <code>altitude_high_meters</code> to show missing values when <code>altitude_mean_meters</code>is missing. I was hoping to use the former two columns to replace missing values in <code>altitude_mean_meters</code>.</p>
+</div>
+<div id="standardizing-altitude-measurements-to-meters" class="section level3">
+<h3>Standardizing altitude measurements to meters</h3>
+<p>After converting all altitude measurements made in foot to meters, are there any inconsistencies? (1 ft = 0.3048 meters)</p>
+<pre class="r"><code>outlier &lt;- coffee %&gt;% 
+  mutate(meters = case_when(
+    str_detect(unit_of_measurement, &quot;ft&quot;) ~ altitude_mean_meters * 0.3048,
+    TRUE ~ altitude_mean_meters),
+    country_of_origin = fct_lump(country_of_origin, 4)) %&gt;%
+  filter(!is.na(meters)) %&gt;% 
+  filter(meters &gt; 8000) %&gt;% 
+  pull(id)
+
+library(fishualize)
+library(ggforce)
+
+coffee %&gt;%
+  mutate(
+    meters = case_when(
+      str_detect(unit_of_measurement, &quot;ft&quot;) ~ altitude_mean_meters * 0.3048,
+      TRUE ~ altitude_mean_meters
+    ),
+    country_of_origin = fct_lump(country_of_origin, 4)
+  ) %&gt;%
+  filter(!is.na(country_of_origin)) %&gt;%
+  ggplot(aes(total_cup_points, meters)) +
+  geom_point(aes(colour = country_of_origin),
+             size = 1.5, alpha = 0.9) +
+  geom_mark_ellipse(aes(
+    filter = id %in% outlier)) +
+  scale_colour_fish_d(option = &quot;Etheostoma_spectabile&quot;) +
+  scale_y_log10(labels = comma) +
+  labs(
+    x = &quot;Total_cup_points&quot;,
+    y = &quot;Meters (log scale)&quot;,
+    colour = &quot;Country of Origin&quot;,
+    title = &quot;Plotting Altitude (meters) against Coffee Quality Points&quot;,
+    subtitle = &quot;Outliers are circled and are likely data entry errors&quot;,
+    caption = &quot;Source: Coffee Quality Database&quot;
+  ) +
+  theme(plot.title = element_text(face = &quot;bold&quot;, size = 20),
+        plot.subtitle = element_text(size = 17)) </code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/altitude%20outliers%20viz-1.png" width="1152" /></p>
+<p>As a sanity check, the highest mountain in the world is <strong>Mount Everest with its peak at 8,848 meters</strong>. Clearly there are some data entry errors recording over 100,000 meters in altitude. Let’s exclude any altitude records above 8000m.</p>
+<pre class="r"><code>coffee &lt;- coffee %&gt;%
+  mutate(meters = case_when(
+    str_detect(unit_of_measurement, &quot;ft&quot;) ~ altitude_mean_meters * 0.3048,
+    TRUE ~ altitude_mean_meters
+  )) %&gt;%
+  #explicitly keep NAs because missing values will be replaced later
+  filter(is.na(meters) | meters &lt;= 8000) %&gt;%
+  select(-altitude, -altitude_low_meters, -altitude_high_meters, -altitude_mean_meters)</code></pre>
+</div>
+<div id="replacing-nas" class="section level3">
+<h3>Replacing NAs</h3>
+<p>Now that all altitude measurements are standardized in the <code>meters</code> column, we can begin to replace NAs.</p>
+<pre class="r"><code>sum(is.na(coffee$meters))</code></pre>
+<pre><code>## [1] 230</code></pre>
+<pre class="r"><code>coffee %&gt;% 
+  filter(is.na(meters)) %&gt;% 
+  count(country_of_origin, region, sort = TRUE)</code></pre>
+<pre><code>## # A tibble: 67 x 3
+##    country_of_origin      region                     n
+##    &lt;chr&gt;                  &lt;chr&gt;                  &lt;int&gt;
+##  1 United States (Hawaii) kona                      64
+##  2 Colombia               huila                     18
+##  3 Guatemala              oriente                   14
+##  4 Colombia               &lt;NA&gt;                       9
+##  5 Thailand               &lt;NA&gt;                       9
+##  6 United States (Hawaii) &lt;NA&gt;                       7
+##  7 Brazil                 monte carmelo              6
+##  8 Ethiopia               sidamo                     5
+##  9 Brazil                 campos altos - cerrado     4
+## 10 Brazil                 cerrado                    4
+## # ... with 57 more rows</code></pre>
+<pre class="r"><code>coffee %&gt;% 
+  filter(country_of_origin == &quot;United States (Hawaii)&quot;,
+         is.na(meters)) %&gt;% 
+  count(country_of_origin, region, sort = T)</code></pre>
+<pre><code>## # A tibble: 2 x 3
+##   country_of_origin      region     n
+##   &lt;chr&gt;                  &lt;chr&gt;  &lt;int&gt;
+## 1 United States (Hawaii) kona      64
+## 2 United States (Hawaii) &lt;NA&gt;       7</code></pre>
+<p>In total we have 230 NAs for <code>meters</code>, of which Hawaii accounts for 71 or 31%.</p>
+<pre class="r"><code>coffee %&gt;% 
+  select(id, country_of_origin, region, meters) %&gt;% 
+  filter(str_detect(country_of_origin, &quot;(Hawaii)&quot;)) %&gt;% 
+  na.omit()</code></pre>
+<pre><code>## # A tibble: 2 x 4
+##      id country_of_origin      region meters
+##   &lt;int&gt; &lt;chr&gt;                  &lt;chr&gt;   &lt;dbl&gt;
+## 1    14 United States (Hawaii) kona     186.
+## 2    52 United States (Hawaii) kona     130.</code></pre>
+<p>Unfortunately, we only have two values for Hawaii. Verifying it with <a href="https://www.konacoffeeandtea.com/blog/2017/what-is-100-kona-coffee">some googling</a>, our two points of data look about right:</p>
+<blockquote>
+<p>The Kona growing region is about 2 miles long and ranges in altitude from 600 ft. (183m) to 2500 ft (762m).</p>
+</blockquote>
+<p>I’ll replace all NAs related to Hawaii with the mean of our existing data points. The function <code>coalesce</code> fills the NA from the first vector with values from the second vector at corresponding positions.</p>
+<pre class="r"><code>hawaii &lt;- coffee %&gt;% 
+  filter(str_detect(country_of_origin, &quot;(Hawaii)&quot;)) %&gt;% 
+  select(id, meters) %&gt;% 
+  mutate(meters = replace_na(meters, (186+130)/2))
+
+coffee_refined &lt;- coffee %&gt;% 
+  left_join(hawaii, by = &quot;id&quot;) %&gt;%
+  mutate(meters = coalesce(meters.x, meters.y)) %&gt;%
+  select(-meters.x, -meters.y)</code></pre>
+<pre class="r"><code>coffee_refined %&gt;% 
+  filter(is.na(meters)) %&gt;% 
+  count(country_of_origin, region, sort = TRUE)</code></pre>
+<pre><code>## # A tibble: 65 x 3
+##    country_of_origin region                     n
+##    &lt;chr&gt;             &lt;chr&gt;                  &lt;int&gt;
+##  1 Colombia          huila                     18
+##  2 Guatemala         oriente                   14
+##  3 Colombia          &lt;NA&gt;                       9
+##  4 Thailand          &lt;NA&gt;                       9
+##  5 Brazil            monte carmelo              6
+##  6 Ethiopia          sidamo                     5
+##  7 Brazil            campos altos - cerrado     4
+##  8 Brazil            cerrado                    4
+##  9 Brazil            &lt;NA&gt;                       4
+## 10 Ethiopia          yirgacheffe                4
+## # ... with 55 more rows</code></pre>
+<p>Let’s do the same for Huila (Colombia) and Oriente (Guatemala).</p>
+<pre class="r"><code>huila &lt;- coffee %&gt;% 
+  filter(str_detect(region, &quot;huila&quot;)) %&gt;% 
+  select(id, meters) %&gt;% 
+  mutate(meters = replace_na(meters, mean(meters, na.rm = TRUE)))
+
+coffee_refined &lt;- coffee_refined %&gt;% 
+  left_join(huila, by = &quot;id&quot;) %&gt;%
+  mutate(meters = coalesce(meters.x, meters.y)) %&gt;%
+  select(-meters.x, -meters.y)
+
+oriente &lt;- coffee %&gt;% 
+  filter(str_detect(region, &quot;oriente&quot;)) %&gt;% 
+  select(id, meters) %&gt;% 
+  mutate(meters = replace_na(meters, mean(meters, na.rm = TRUE)))
+
+coffee_refined &lt;- coffee_refined %&gt;% 
+  left_join(oriente, by = &quot;id&quot;) %&gt;%
+  mutate(meters = coalesce(meters.x, meters.y)) %&gt;%
+  select(-meters.x, -meters.y)</code></pre>
+<p>We’ll replace the remaining missing values shortly using the <code>recipes</code> package during our feature pre-processing stage.</p>
+</div>
+</div>
+<div id="analyzing-variety-missingness" class="section level2">
+<h2>Analyzing variety missingness</h2>
+<p><code>variety</code> appears to be another interesting column …</p>
+<pre class="r"><code>coffee_refined %&gt;% 
+  count(variety, sort = T)</code></pre>
+<pre><code>## # A tibble: 29 x 2
+##    variety            n
+##    &lt;chr&gt;          &lt;int&gt;
+##  1 Caturra          255
+##  2 &lt;NA&gt;             226
+##  3 Bourbon          224
+##  4 Typica           211
+##  5 Other            109
+##  6 Catuai            74
+##  7 Hawaiian Kona     44
+##  8 Yellow Bourbon    35
+##  9 Mundo Novo        33
+## 10 Catimor           20
+## # ... with 19 more rows</code></pre>
+<p>… but missing values (NAs) are constitute nearly 17% of the data.</p>
+<pre class="r"><code>coffee_refined %&gt;% 
+  skimr::skim() %&gt;% 
+  select(skim_variable, complete_rate) %&gt;% 
+  filter(skim_variable == &quot;variety&quot;)</code></pre>
+<pre><code>## # A tibble: 1 x 2
+##   skim_variable complete_rate
+##   &lt;chr&gt;                 &lt;dbl&gt;
+## 1 variety               0.831</code></pre>
+<p>Let’s visualize the missingness of data in <code>variety</code>. Specifically, is there a relationship between <code>country_of_origin</code> and missing data in <code>variety</code>?</p>
+<pre class="r"><code>coffee_refined %&gt;% 
+  group_by(country_of_origin) %&gt;% 
+  filter(sum(is.na(variety)) &gt; 10) %&gt;% 
+  ungroup() %&gt;% 
+  ggplot(aes(total_cup_points, meters, colour = is.na(variety))) +
+  geom_point(size = 1.5) +
+  scale_colour_fish_d(option = &quot;Etheostoma_spectabile&quot;) +
+  facet_wrap(~ country_of_origin) +
+  labs(
+    x = &quot;Total_cup_points&quot;,
+    y = &quot;Meters&quot;,
+    colour = &quot;Is Variety Missing?&quot;,
+    title = &quot;Which countries contain the highest amount of missing data in Variety?&quot;,
+    subtitle = &quot;Filtering for countries with more than 10 missing variety-related data entries&quot;,
+    caption = &quot;Source: Coffee Quality Database&quot;
+  ) +
+  theme(plot.title = element_text(face = &quot;bold&quot;, size = 20),
+        plot.subtitle = element_text(size = 17)) </code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/variety%20viz-1.png" width="1152" /></p>
+<p>Most of the missing <code>variety</code> data are from a select few countries - Colombia, Ethiopia, India, Thailand and Uganda. The missing values for <code>variety</code> will also be addressed later on using <code>recipes</code>.</p>
+</div>
+<div id="visualizing-highest-scores-across-countries" class="section level2">
+<h2>Visualizing highest scores across countries</h2>
+<pre class="r"><code>library(ggridges)
+
+country_freq &lt;- coffee_refined %&gt;% 
+  group_by(country_of_origin) %&gt;% 
+  add_count(name = &quot;total_entry&quot;) %&gt;% 
+  ungroup() %&gt;% 
+  mutate(freq = total_entry / sum(n())) %&gt;% 
+  distinct(country_of_origin, .keep_all = TRUE) %&gt;% 
+  select(country_of_origin, freq) %&gt;% 
+  arrange(desc(freq)) %&gt;% 
+  slice(1:10) %&gt;% 
+  pull(country_of_origin)
+
+coffee_refined %&gt;% 
+  filter(country_of_origin %in% country_freq,
+         total_cup_points &gt; 75) %&gt;% 
+  mutate(country_of_origin = fct_reorder(country_of_origin, total_cup_points)) %&gt;% 
+  ggplot(aes(total_cup_points, country_of_origin, fill = country_of_origin)) +
+  geom_density_ridges(scale = 1, alpha = 0.8, show.legend = F) +
+  scale_fill_fish_d(option = &quot;Antennarius_multiocellatus&quot;, begin = 0.5, end = 0) +
+  theme_ridges(center_axis_labels = TRUE) +
+  labs(
+    x = &quot;Total Cup Points&quot;,
+    y = NULL,
+    fill = &quot;&quot;,
+    title = &quot;Visualizing Distribution of Coffee Ratings Across Countries&quot;,
+    subtitle = &quot;Below: Top 10 countries based on absolute # of coffee ratings given,\nsorted according to score&quot;,
+    caption = &quot;Source: Coffee Quality Database&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+    legend.title = element_text(face = &quot;bold&quot;, size = 15)
+  ) </code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/country%20coffee%20ratings%20ggridges%20viz-1.png" width="1152" /></p>
+</div>
+<div id="finalizing-the-dataset" class="section level2">
+<h2>Finalizing the dataset</h2>
+<p>That was quite a bit of EDA just to replace missing values! Finalizing the data set, we have included:</p>
+<ul>
+<li>Unique identifier: <code>id</code></li>
+<li>Outcome (what we want to predict): <code>total_cup_points</code></li>
+<li>Predictors: <code>country_of_origin</code>, <code>in_country_partner</code>, <code>certification_body</code>, <code>variety</code>, <code>processing_method</code>, <code>meters</code></li>
+</ul>
+<p>Recall <code>meters</code> is an engineered feature that was earlier created from various altitude column.</p>
+<pre class="r"><code>coffee_df &lt;- coffee_refined %&gt;% 
+    select(id, total_cup_points, 
+           country_of_origin, 
+           in_country_partner, certification_body, variety, processing_method,
+           #aroma:cupper_points, 
+           meters) %&gt;% 
+  #converting all character columns to factors
+  mutate(across(where(is.character), as.factor))</code></pre>
+<div id="excluding-aromacupper_points" class="section level3">
+<h3>Excluding aroma:cupper_points</h3>
+<p>Importantly, you might have realized I have chosen <strong>not</strong> to include columns <code>aroma:cupper_points</code>; reason being because our outcome is the sum of these columns, and using these predictors will lead to all three models ignoring all other predictors that don’t below in these columns i.e. variable importance for these columns are overwhelmingly high.</p>
+<p>Thus, the intention was that by excluding these columns, I wanted to make it more challenging for the models to predict the outcome - somewhat akin to the complexity faced in real-life predictive modeling.</p>
+</div>
+</div>
+</div>
+<div id="modeling" class="section level1">
+<h1>Modeling</h1>
+<p>The objective is to run three models: LASSO, Random Forest and XGboost, and compare performance in predicting <code>total_cup_points</code>.</p>
+<div id="initial-split" class="section level2">
+<h2>Initial Split</h2>
+<pre class="r"><code>set.seed(2020)
+coffee_split &lt;- initial_split(coffee_df)
+coffee_train &lt;- training(coffee_split)
+coffee_test &lt;- testing(coffee_split)</code></pre>
+</div>
+<div id="resampling" class="section level2">
+<h2>Resampling</h2>
+<p>All three models will undergo hyperparameter tuning using crossfold validation. Here, I opt to use 10-fold cross validation.</p>
+<pre class="r"><code>set.seed(2020)
+folds &lt;- vfold_cv(coffee_train, v = 10)</code></pre>
+</div>
+</div>
+<div id="lasso-model" class="section level1">
+<h1>LASSO Model</h1>
+<div id="model-specification" class="section level2">
+<h2>Model Specification</h2>
+<p>Here I’m specifying the LASSO model I intend to fit. Hyperparameters tagged to <code>tune()</code> will be subsequently tuned using a grid search.</p>
+<pre class="r"><code>model_lasso &lt;- linear_reg(penalty = tune(), mixture = 1) %&gt;% 
+  set_engine(&quot;glmnet&quot;) %&gt;% 
+  set_mode(&quot;regression&quot;) </code></pre>
+</div>
+<div id="feature-preprocessing" class="section level2">
+<h2>Feature Preprocessing</h2>
+<p>I came across this great illustration by Allison Horst describing the <code>recipes</code> package: <img src="https://raw.githubusercontent.com/allisonhorst/stats-illustrations/master/rstats-artwork/recipes.png" alt="recipes" /></p>
+<p>Just a quick check on which columns have missing data:</p>
+<pre class="r"><code>coffee_train %&gt;% 
+  map_df(~ sum(is.na(.))) %&gt;% 
+  t()</code></pre>
+<pre><code>##                    [,1]
+## id                    0
+## total_cup_points      0
+## country_of_origin     0
+## in_country_partner    0
+## certification_body    0
+## variety             165
+## processing_method   128
+## meters               91</code></pre>
+<p>Here we specify the recipe:</p>
+<ul>
+<li><code>step_other</code>: Collapse factors into “other” if they don’t meet a predefined threshold</li>
+<li><code>step_dummy</code>: Turns nominal (character/factor) columns into numeric binary data. Necessary because the LASSO can only process numeric data</li>
+<li><code>step_knnimpute</code>: Imputes the remainder of missing values using knn (default is 5). Here, after imputing missing values of <code>meters</code>, I used it to impute missing values of <code>variety</code>, and subsequently used both for imputing missing values of <code>processing_method</code></li>
+<li><code>step_normalize</code>: Normalizes numeric data to have a standard deviation of one and a mean of zero. Necessary since the LASSO is sensitive to outliers</li>
+</ul>
+<pre class="r"><code>coffee_rec &lt;- coffee_train %&gt;%
+  recipe(total_cup_points ~ .) %&gt;%
+  update_role(id, new_role = &quot;id&quot;) %&gt;%
+  step_other(
+    country_of_origin,
+    in_country_partner,
+    certification_body,
+    variety,
+    processing_method,
+    threshold = 0.02,
+    other = &quot;uncommon&quot;
+  ) %&gt;%
+  step_dummy(all_nominal(), -variety, -processing_method) %&gt;%
+  step_knnimpute(meters,
+                 impute_with = imp_vars(contains(c(
+                   &quot;country&quot;, &quot;certification&quot;
+                 )))) %&gt;%
+  step_knnimpute(variety,
+                 impute_with = imp_vars(contains(c(
+                   &quot;country&quot;, &quot;certification&quot;, &quot;meters&quot;
+                 )))) %&gt;%
+  step_knnimpute(processing_method,
+                 impute_with = imp_vars(contains(
+                   c(&quot;country&quot;, &quot;certification&quot;, &quot;meters&quot;, &quot;variety&quot;)
+                 ))) %&gt;%
+  step_dummy(variety, processing_method) %&gt;%
+  step_normalize(all_numeric(), -all_outcomes()) %&gt;%
+  step_knnimpute(all_predictors())</code></pre>
+<p><code>prep()</code> estimates the required parameters from the training set, and <code>juice()</code> applies these parameters on the training data and returns us the data in a tibble. The code below indicates that there are no more missing values after our pre-processing.</p>
+<pre class="r"><code>coffee_rec %&gt;% 
+  prep() %&gt;% 
+  juice() %&gt;%
+  summarise(is_na = sum(is.na(across(everything())))) </code></pre>
+<pre><code>## # A tibble: 1 x 1
+##   is_na
+##   &lt;int&gt;
+## 1     0</code></pre>
+</div>
+<div id="workflows" class="section level2">
+<h2>Workflows</h2>
+<p>The <code>workflows</code> package introduces workflow objects that can help manage modeling pipelines more easily - akin to pieces that fit together like Lego blocks.</p>
+<pre class="r"><code>lasso_wf &lt;- workflow() %&gt;%
+  add_recipe(coffee_rec) %&gt;%
+  add_model(model_lasso)</code></pre>
+</div>
+<div id="hyperparameter-tuning" class="section level2">
+<h2>Hyperparameter Tuning</h2>
+<p>I’m setting up three respective grids for our three models. First up - for the LASSO model, I’ll be using <code>grid_random</code> to generate a random grid.</p>
+<pre class="r"><code>set.seed(2020)
+lasso_grid &lt;- grid_random(penalty(), size = 50)</code></pre>
+<p>Once parallel processing has been set up, the tuning can now commence!</p>
+<pre class="r"><code>all_cores &lt;- parallel::detectCores(logical = FALSE)
+library(doParallel)
+cl &lt;- makePSOCKcluster(all_cores)
+registerDoParallel(cl)
+
+set.seed(2020)
+
+lasso_res &lt;- tune_grid(
+  object = lasso_wf,
+  resamples = folds,
+  grid = lasso_grid,
+  control = control_grid(save_pred = TRUE)
+  )</code></pre>
+</div>
+<div id="training-performance-assessment" class="section level2">
+<h2>Training Performance Assessment</h2>
+<p>The results can be obtained with <code>collect_metrics()</code> and subsequently visualized; and
+the best tuned hyperparameters associated with the lowest in-sample RMSE can be obtained with <code>show_best()</code>.</p>
+<pre class="r"><code>lasso_res %&gt;%
+  collect_metrics() %&gt;%
+  ggplot(aes(penalty, mean)) +
+  geom_line(aes(color = .metric), size = 1.5, show.legend = FALSE) +
+  facet_wrap(. ~ .metric, nrow = 2) +
+  scale_x_log10(label = scales::number_format()) +
+  labs(
+    x = &quot;Penalty&quot;,
+    y = &quot;RMSE&quot;,
+    title = &quot;LASSO: Assessing In-Sample Performance of Tuned Hyperparameters&quot;,
+    subtitle = &quot;RMSE appears to be minimized when penalty is &lt;0.01&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+  ) </code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/lasso%20show%20best%20viz-1.png" width="1152" /></p>
+<pre class="r"><code>lasso_res %&gt;% 
+  show_best(&quot;rmse&quot;)</code></pre>
+<pre><code>## # A tibble: 5 x 7
+##   penalty .metric .estimator  mean     n std_err .config
+##     &lt;dbl&gt; &lt;chr&gt;   &lt;chr&gt;      &lt;dbl&gt; &lt;int&gt;   &lt;dbl&gt; &lt;fct&gt;  
+## 1 0.0153  rmse    standard    2.48    10   0.135 Model39
+## 2 0.0183  rmse    standard    2.48    10   0.135 Model40
+## 3 0.00954 rmse    standard    2.48    10   0.136 Model38
+## 4 0.00441 rmse    standard    2.49    10   0.136 Model37
+## 5 0.0436  rmse    standard    2.49    10   0.134 Model41</code></pre>
+</div>
+<div id="finalizing-hyperparameters" class="section level2">
+<h2>Finalizing Hyperparameters</h2>
+<p>Let’s use <code>select_best()</code> to obtain the optimal penalty hyperparameters that minimizes RMSE, and <code>finalize_workflow()</code> is used to fit the optimal hyperparameters to the LASSO model and the training data.</p>
+<pre class="r"><code>lasso_best &lt;- lasso_res %&gt;% 
+  select_best(&quot;rmse&quot;)
+
+lasso_final_wf &lt;- lasso_wf %&gt;% 
+  finalize_workflow(lasso_best)</code></pre>
+</div>
+</div>
+<div id="random-forest-xgboost-models" class="section level1">
+<h1>Random Forest &amp; XGBoost Models</h1>
+<p>Just like what was done for the LASSO model, the random forest &amp; XGBoost models can be specificed the same way. The process is also similar when creating respective workflows, tuning hyperparameters, selecting the hyperparameters that corresponds to the lowest RMSE, and finalizing the workflow.</p>
+<div id="model-specification-1" class="section level2">
+<h2>Model Specification</h2>
+<p>Let’s set <code>trees = 1000</code> for both random forest and XGBoost, and tune the remaining hyperparameters.</p>
+<pre class="r"><code>model_rf &lt;- rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %&gt;% 
+  set_engine(&quot;ranger&quot;, importance = &quot;permutation&quot;) %&gt;% 
+  set_mode(&quot;regression&quot;)
+
+model_xgboost &lt;- boost_tree(
+  trees = 1000,
+  #model complexity
+  tree_depth = tune(), min_n = tune(), loss_reduction = tune(),
+  #randomness
+  sample_size = tune(), mtry = tune(),
+  #step size
+  learn_rate = tune()) %&gt;%
+  set_engine(&quot;xgboost&quot;) %&gt;%
+  set_mode(&quot;regression&quot;)</code></pre>
+</div>
+<div id="workflows-1" class="section level2">
+<h2>Workflows</h2>
+<p>The beauty of <code>tidymodels</code> is that we can conveniently re-use the same preprocessing recipe, <code>coffee_rec</code>, in conjunction with the random forest and XGBoost model workflows.</p>
+<pre class="r"><code>rf_wf &lt;- workflow() %&gt;%
+  add_recipe(coffee_rec) %&gt;%
+  add_model(model_rf)
+
+xgb_wf &lt;- workflow() %&gt;%
+  add_recipe(coffee_rec) %&gt;%
+  add_model(model_xgboost)</code></pre>
+</div>
+<div id="hyperparameter-tuning-1" class="section level2">
+<h2>Hyperparameter Tuning</h2>
+<p>Similar to the LASSO, a <code>grid_random</code> will be used for the random forest model. Note that <code>finalize()</code> was used, together with our training set, to determine the upper-bound for our <code>mtry()</code> hyperparameter (representing number of predictors that will be randomly sampled at each split when creating the tree models).</p>
+<p>For the XGBoost model, however, we are using a space-filling <a href="https://en.wikipedia.org/wiki/Latin_hypercube_sampling">latin hypercube</a> grid that employs a statistical method for generating a near-random sample of parameter values from a multidimensional distribution.</p>
+<pre class="r"><code>set.seed(2020)
+rf_grid &lt;- grid_random(finalize(mtry(), coffee_train),
+                       min_n(), size = 50) 
+
+set.seed(2020)
+xgb_grid &lt;- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), coffee_train),
+  learn_rate(),
+  size = 50
+)</code></pre>
+<p>With the grids set up, now we can tune both models’ hyperparameters.</p>
+<pre class="r"><code>all_cores &lt;- parallel::detectCores(logical = FALSE)
+library(doParallel)
+cl &lt;- makePSOCKcluster(all_cores)
+registerDoParallel(cl)
+
+set.seed(2020)
+rf_res &lt;- tune_grid(
+  object = rf_wf,
+  resamples = folds,
+  grid = rf_grid,
+  control = control_grid(save_pred = TRUE)
+  )
+
+set.seed(2020)
+xgb_res &lt;- tune_grid(
+  object = xgb_wf,
+  resamples = folds,
+  grid = xgb_grid,
+  control = control_grid(save_pred = TRUE)
+  )</code></pre>
+</div>
+<div id="training-performance-assessment-1" class="section level2">
+<h2>Training Performance Assessment</h2>
+<p>We can also visually assess the performance across all tuned hyperparameters and their effect on RMSE for the random forest model</p>
+<pre class="r"><code>rf_res %&gt;%
+  collect_metrics() %&gt;%
+  filter(.metric == &quot;rmse&quot;) %&gt;% 
+  pivot_longer(mtry:min_n, 
+               names_to = &quot;parameter&quot;,
+               values_to = &quot;value&quot;) %&gt;% 
+  ggplot(aes(value, mean)) +
+  geom_point(aes(color = parameter), size = 2, show.legend = FALSE) +
+  facet_wrap(. ~ parameter, scales = &quot;free_x&quot;) +
+  labs(x = &quot;&quot;, 
+       y = &quot;RMSE&quot;,
+       title = &quot;Random Forest: Assessing In-Sample Performance of Tuned Hyperparameters&quot;,
+       subtitle = &quot;RMSE appears to be minimized at low levels of min_n and mtry&quot;) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+  ) </code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/rf%20show%20best%20viz-1.png" width="1152" /></p>
+<pre class="r"><code>rf_res %&gt;% 
+  show_best(&quot;rmse&quot;)</code></pre>
+<pre><code>## # A tibble: 5 x 8
+##    mtry min_n .metric .estimator  mean     n std_err .config
+##   &lt;int&gt; &lt;int&gt; &lt;chr&gt;   &lt;chr&gt;      &lt;dbl&gt; &lt;int&gt;   &lt;dbl&gt; &lt;fct&gt;  
+## 1     6    18 rmse    standard    2.45    10   0.141 Model45
+## 2     5    14 rmse    standard    2.46    10   0.140 Model25
+## 3     6    25 rmse    standard    2.46    10   0.140 Model49
+## 4     7    17 rmse    standard    2.46    10   0.139 Model36
+## 5     6    24 rmse    standard    2.46    10   0.139 Model30</code></pre>
+<p>Let’s do the same for the XGBoost model.</p>
+<pre class="r"><code>xgb_res %&gt;%
+  collect_metrics() %&gt;%
+  filter(.metric == &quot;rmse&quot;) %&gt;%
+  select(mean, mtry:sample_size) %&gt;%
+  pivot_longer(mtry:sample_size,
+               names_to = &quot;parameter&quot;,
+               values_to = &quot;value&quot;) %&gt;%
+  ggplot(aes(value, mean)) +
+  geom_point(aes(color = parameter),
+             size = 2,
+             show.legend = FALSE) +
+  facet_wrap(. ~ parameter, scales = &quot;free_x&quot;) +
+  labs(
+    x = &quot;&quot;,
+    y = &quot;RMSE&quot;,
+    title = &quot;XGBoost: Assessing In-Sample Performance of Tuned Hyperparameters&quot;,
+    subtitle = &quot;Several combinations of parameters do well to minimize RMSE&quot;
+  ) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+  ) </code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/xgb%20show%20best%20viz-1.png" width="1152" /></p>
+<pre class="r"><code>xgb_res %&gt;% 
+  show_best(&quot;rmse&quot;)</code></pre>
+<pre><code>## # A tibble: 5 x 12
+##    mtry min_n tree_depth learn_rate loss_reduction sample_size .metric
+##   &lt;int&gt; &lt;int&gt;      &lt;int&gt;      &lt;dbl&gt;          &lt;dbl&gt;       &lt;dbl&gt; &lt;chr&gt;  
+## 1     4     6         14    0.0225        4.08e- 1       0.797 rmse   
+## 2     5    11          3    0.0810        3.43e- 4       0.948 rmse   
+## 3     8    28          2    0.00648       1.20e-10       0.804 rmse   
+## 4     6    29         13    0.0336        2.95e+ 1       0.465 rmse   
+## 5     5    13          8    0.0655        5.60e- 1       0.985 rmse   
+## # ... with 5 more variables: .estimator &lt;chr&gt;, mean &lt;dbl&gt;, n &lt;int&gt;,
+## #   std_err &lt;dbl&gt;, .config &lt;fct&gt;</code></pre>
+</div>
+<div id="finalizing-hyperparameters-1" class="section level2">
+<h2>Finalizing Hyperparameters</h2>
+<p>The workflows for both the random forest and XGBoost models are now finalized.</p>
+<pre class="r"><code>rf_best &lt;- rf_res %&gt;% 
+  select_best(&quot;rmse&quot;)
+
+xgb_best &lt;- xgb_res %&gt;% 
+  select_best(&quot;rmse&quot;)
+
+rf_final_wf &lt;- rf_wf %&gt;% 
+  finalize_workflow(rf_best)
+
+xgb_final_wf &lt;- xgb_wf %&gt;% 
+  finalize_workflow(xgb_best)</code></pre>
+</div>
+</div>
+<div id="variable-importance" class="section level1">
+<h1>Variable Importance</h1>
+<p>Before running the models on the test data, let’s compare variable importance for our models. It can be useful know which, if any, of the predictors in a fitted model are relatively influential on the predicted outcome.</p>
+<pre class="r"><code>library(vip) #variable importance plots
+library(patchwork) #combining plots
+
+p1 &lt;- lasso_final_wf %&gt;% 
+  fit(coffee_train) %&gt;% 
+  pull_workflow_fit() %&gt;% 
+  vip(geom = &quot;point&quot;) +
+  ggtitle(&quot;LASSO&quot;) 
+
+p2 &lt;- rf_final_wf %&gt;% 
+  fit(coffee_train) %&gt;% 
+  pull_workflow_fit() %&gt;% 
+  vip(geom = &quot;point&quot;) +
+  ggtitle(&quot;Random Forest&quot;)
+
+p3 &lt;- xgb_final_wf %&gt;% 
+  fit(coffee_train) %&gt;% 
+  pull_workflow_fit() %&gt;% 
+  vip(geom = &quot;point&quot;) +
+  ggtitle(&quot;XGBoost&quot;)
+
+p1 + p2 / p3 + plot_annotation(
+  title = &#39;Assessing Variable Importance Across Models&#39;,
+  subtitle = &#39;The engineered feature \&quot;meters\&quot; is heavily favoured by the tree-based models,\nwhile also ranking fourth for the LASSO in terms of variable importance&#39;,
+  theme = theme(
+    plot.title = element_text(size = 18),
+    plot.subtitle = element_text(size = 14)
+  )
+) </code></pre>
+<p><img src="/post/2020-08-29-predicting-coffee-quality-with-ml.en-us_files/figure-html/variable%20importance%20viz-1.png" width="1152" /></p>
+<p>Earlier, Ethiopia stood out as the country with the highest mean scores when visualizing coffee rating scores across countries earlier. Here, it makes sense to see <code>country_of_origin_Ethiopia</code> having relatively high variable importance for the LASSO and XGBoost model. The engineered feature, <code>meters</code>, has a significant variable importance contribution too for our tree-based models.</p>
+</div>
+<div id="model-selection" class="section level1">
+<h1>Model Selection</h1>
+<p>As a recap, here are the corresponding RMSE values for the set of hyperparameters that was selected for our models.</p>
+<pre class="r"><code>lasso_res %&gt;%
+  show_best(metric = &quot;rmse&quot;) %&gt;%
+  mutate(model = &quot;lasso&quot;) %&gt;%
+  bind_rows(rf_res %&gt;%
+              show_best(metric = &quot;rmse&quot;) %&gt;%
+              mutate(model = &quot;randomforest&quot;)) %&gt;%
+  bind_rows(xgb_res %&gt;%
+              show_best(metric = &quot;rmse&quot;) %&gt;%
+              mutate(model = &quot;xgboost&quot;)) %&gt;%
+  group_by(model) %&gt;%
+  summarise(lowest_training_rmse = round(min(mean), 3))</code></pre>
+<pre><code>## # A tibble: 3 x 2
+##   model        lowest_training_rmse
+##   &lt;chr&gt;                       &lt;dbl&gt;
+## 1 lasso                        2.48
+## 2 randomforest                 2.46
+## 3 xgboost                      2.47</code></pre>
+<p>As the final step, for all three models, we perform a <code>last_fit</code> using the split data, <code>coffee_split</code>.</p>
+<p>This seeks to emulates the process where, after determining the best model, the final fit on the entire training set is used to evaluate the test set, <code>coffee_test</code> (which has not been touched since the initial split).</p>
+<pre class="r"><code>lasso_final_wf %&gt;%
+  last_fit(coffee_split) %&gt;%
+  collect_metrics() %&gt;%
+  mutate(model = &quot;lasso&quot;) %&gt;%
+  bind_rows(
+    rf_final_wf %&gt;%
+      last_fit(coffee_split) %&gt;%
+      collect_metrics() %&gt;%
+      mutate(model = &quot;randomforest&quot;)
+  ) %&gt;%
+  bind_rows(
+    xgb_final_wf %&gt;%
+      last_fit(coffee_split) %&gt;%
+      collect_metrics() %&gt;%
+      mutate(model = &quot;xgboost&quot;)
+  ) %&gt;% 
+  filter(.metric ==&quot;rmse&quot;)</code></pre>
+<pre><code>## # A tibble: 3 x 4
+##   .metric .estimator .estimate model       
+##   &lt;chr&gt;   &lt;chr&gt;          &lt;dbl&gt; &lt;chr&gt;       
+## 1 rmse    standard        2.35 lasso       
+## 2 rmse    standard        2.30 randomforest
+## 3 rmse    standard        2.33 xgboost</code></pre>
+</div>
+<div id="conclusion" class="section level1">
+<h1>Conclusion</h1>
+<p>Test results for all three models are lower than their training scores, indicating the absence of overfitting. Both tree-based models also performed slightly better than the LASSO model, which could mean there are <a href="http://www.feat.engineering/approaches-when-complete-enumeration-is-practically-impossible.html#tree-based-methods">interaction effects at play</a>. While I would select the random forest model in this case, the difference in test RMSE is so close that I’d still be inclined to compare all three models’ performance in future.</p>
+</div>

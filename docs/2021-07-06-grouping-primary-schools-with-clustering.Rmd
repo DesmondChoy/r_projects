@@ -1,0 +1,803 @@
+---
+title: Grouping Primary Schools With Clustering
+author: Desmond Choy
+date: '2021-07-06'
+tags:
+  - EDA
+  - machine learning
+  - r
+  - visualization
+slug: index.en-us
+summary: Using public data as well as slightly unconventional (but widely quoted) data points such as a schools affiliation and popularity, can clustering offer an alternative comparison method when selecting your childs primary school?  
+readingtime: '15'
+coverImage: https://www.tnp.sg/sites/default/files/styles/rl780/public/articles/2017/07/17/cs-generic-primaryschoolkids02.jpg?itok=5kWkHCme
+thumbnailImage: https://images.unsplash.com/photo-1565291115725-d55f111538f3?ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&ixlib=rb-1.2.1&auto=format&fit=crop&w=331&q=80
+thumbnailImagePosition: left
+coverCaption: Photo by KUA CHEE SIONG (ST)
+output:
+  blogdown::html_page:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  error = FALSE,
+  fig.width = 12,
+  fig.height = 10)
+```
+
+Note: Should you wish to skip reading the commentary, data wrangling and clustering process - and jump straight to the table containing schools and clusters, click the **Explore clusters via an interactive table** link above.
+
+# Choosing a primary school
+
+In Singapore, the start of primary school marks the official commencement of a child's formal education, and what follows is typically a multi-year journey that continues through secondary school to tertiary education.   
+
+Like many of life's important decisions, this isn't a straightforward choice for most parents and planning often starts years ahead of the child's eligible age (6 years old). With over 180 primary schools in Singapore and a registration process that takes place over [multiple priority phase](https://www.moe.gov.sg/primary/p1-registration/registration-phases-key-dates), I can empathize why parents could still be [left confused](https://www.asiaone.com/singapore/confusing-p1-registration-gives-advantage-privileged-children-yale-nus-study) despite doing their homework (pun intended). 
+
+The Ministry of Education has provided a bevy of [online resources](https://www.moe.gov.sg/primary/p1-registration/how-to-choose-a-school) regarding primary school selection, including a [school finder](https://www.moe.gov.sg/schoolfinder?journey=Primary%20school).
+
+In this blog post, I aim to explore if clustering methods can offer an alternative comparison method when choosing a primary school, using public data made available by the government as well as incorporating slightly unconventional (but widely quoted) data points such as a school's affiliation and popularity.  
+
+That being said, the final decision could very well be driven by factors not captured in public data e.g. if a sibling is already in the school, it makes sense to choose the same school. 
+
+# Libraries
+
+```{r}
+#data wrangling
+library(tidyverse) 
+library(tidytext)
+library(widyr)
+
+#clustering
+library(tidymodels)
+library(broom)
+
+#visualization
+library(igraph)
+library(ggraph)
+library(patchwork)
+library(waffle)
+library(hrbrthemes)
+library(ggthemes)
+
+#tables
+library(knitr)
+library(reactable)
+library(crosstalk)
+
+theme_set(theme_minimal())
+```
+
+# Importing data
+
+Data used in this post for schools was [downloaded here](https://data.gov.sg/dataset/school-directory-and-information) in June 2021.
+
+```{r read data}
+schools <- read_csv("https://raw.githubusercontent.com/DesmondChoy/DataSets/master/general-information-of-schools.csv") %>% 
+  map_df(~str_to_title(.))
+
+subjects <- read_csv("https://raw.githubusercontent.com/DesmondChoy/DataSets/master/subjects-offered.csv") %>%
+  map_df(~str_to_title(.))
+
+affiliation <- read_csv("https://raw.githubusercontent.com/DesmondChoy/DataSets/master/school_affiliation.csv")
+```
+
+I have excluded using CCA (co-curricular activities) data provided because thirteen schools have missing data.
+
+# Identifying primary schools
+
+Let's first identify only primary schools from the data set.
+
+```{r}
+schools %>% 
+  count(mainlevel_code, sort = TRUE)
+```
+
+Do `Mixed Levels` count as primary schools? 
+
+```{r}
+schools %>% 
+  filter(mainlevel_code == "Mixed Levels") %>% 
+  select(school_name, mainlevel_code)
+```
+
+I did some preliminary investigation (read: googling) into each school and decided to include only Chij St. Nicholas Girls' School, Catholic High School and Maris Stella High School. 
+
+```{r}
+mixed_levels <- schools %>% 
+  filter(mainlevel_code == "Mixed Levels",
+         #filter out mixed levels school with no primary levels
+         school_name %in% c("Chij St. Nicholas Girls' School", "Catholic High School", "Maris Stella High School")) %>% 
+  pull(school_name)
+
+mixed_levels
+```
+
+With that, we have `pri_sch` data frame consisting of only primary schools.
+
+```{r}
+schools <- schools %>% 
+  mutate(mainlevel_code = replace(mainlevel_code,
+                                  school_name %in% mixed_levels,
+                                  "Primary"))
+pri_sch <- schools %>% 
+  filter(mainlevel_code == "Primary")
+
+pri_sch %>% glimpse()
+```
+
+# Key considerations
+
+For clustering, I will narrow down the `pri_sch` data to a couple of key considerations (in my humble opinion) that will swing the decision:  
+
+* Location. Proximity to a family's current residenceor where they might be residing in future. Here we'll be using `zone_code` (North/South/East/West) and `dgp_code` - consisting of all 27 urban planning and census [divisions of Singapore](https://en.wikipedia.org/wiki/Planning_Areas_of_Singapore). This is important because families that stay within 1km/2km of a school enjoy priority.  
+* `nature_code` representing the co-ed status of a school - whether a school is mixed or a strictly Boys'/Girls' school. 
+* `gifted_ind` indicates if a school offers [Gifted Education Programme (GEP)](https://en.wikipedia.org/wiki/Gifted_Education_Programme_(Singapore)). The GEP is designed to identify the top 1% students based on a series of tests. As of 2020, 9 schools offer GEP.
+* `sap_ind` indicates if a school offers [Special Assistance Plan (SAP)](https://en.wikipedia.org/wiki/Special_Assistance_Plan), which is a syllabus more focused on a student's mother tongue (typically Mandarin). Here is an [interesting commentary](http://mylilbookworm.blogspot.com/2015/04/to-sap-or-not-to-sap-dilemma-of.html) I found on SAP schools.
+
+On a related note, I intentionally excluded data points related to accessibility i.e. public transport. I could be wrong on this, but I believe a great deal of parents would use the school's bus shuttle services to transport the kids to and fro from school. Accessibility is a point of consideration but would come into play more strongly when a child is old and independent enough to take public transport.
+
+```{r}
+features <- pri_sch %>% 
+  select(school_name, zone_code, dgp_code, nature_code, gifted_ind, sap_ind)
+
+features
+```
+
+## Affiliations
+
+Whether a primary school has affiliations (or not) with a secondary school is usually an important factor when selecting a primary school. Secondary schools offer students from affiliated primary schools students priority admission as they focus on fostering strong school spirits and traditions. This essentially makes it easier for affiliated students to enter the related secondary school.
+
+This is the list of primary schools with affiliations, taken from [here](https://www.salary.sg/2020/best-primary-schools-2020-by-popularity/):
+
+```{r}
+affiliation %>% 
+  kable()
+```
+
+```{r}
+affiliation <- affiliation %>%
+  mutate(
+    school_name = case_when(
+      school_name == "Canossa Convent Primary School" ~ "Canossa Catholic Primary School",
+      school_name == "Catholic High School (Primary)" ~ "Catholic High School",
+      school_name == "CHIJ St. Nicholas Girls' School (Primary)" ~ "Chij St. Nicholas Girls' School",
+      TRUE ~ school_name
+    ),
+    school_name = str_replace_all(school_name, "CHIJ", "Chij"),
+    school_name = str_replace_all(school_name, "of", "Of"),
+    school_name = str_replace_all(school_name, "the", "The"),
+    school_name = str_remove_all(school_name, "[:blank:]+\\(co-ed\\)")
+  ) %>%
+  select(-affiliation)
+
+```
+
+## Popularity
+
+The popularity of a school can be quantified in several ways - one of which is the average subscription rate for Phase 2A2 and Phase 2B. (See [here](https://www.moe.gov.sg/primary/p1-registration/registration-phases-key-dates) as a refresher on how phases work). There isn't any public data available to draw correlations/conclusions between a primary school's average examination performance and its popularity but, for better or for worse, popularity of schools is a metric monitored closely by certain parents.  
+
+I've taken popularity data [compiled here](https://www.salary.sg/2020/best-primary-schools-2020-by-popularity/).
+
+```{r}
+popularity <- read_csv("https://raw.githubusercontent.com/DesmondChoy/DataSets/master/school_popularity.csv") %>%
+  mutate(
+    school_name = case_when(
+      school_name == "Singapore Chinese Girls' School (Primary)" ~ "Singapore Chinese Girls' Primary School",
+      school_name == "Catholic High School (Primary Section)" ~ "Catholic High School",
+      school_name == "CHIJ St. Nicholas Girls' School (Primary Section)" ~ "Chij St. Nicholas Girls' School",
+      school_name == "Maris Stella High School (Primary Section)" ~ "Maris Stella High School",
+      TRUE ~ school_name
+    ),
+    school_name = str_replace_all(school_name, "CHIJ", "Chij"),
+    school_name = str_replace_all(school_name, "of", "Of"),
+    school_name = str_replace_all(school_name, "the", "The")
+  ) %>%
+  select(-data) %>% 
+  rename("popularity" = "sub_avg")
+```
+
+Instead of using their absolute rankings, I've decided to lump them into ten approximately equal groups after sorting them by their rankings.
+
+```{r}
+pop_grouping <- popularity %>% 
+  arrange(desc(popularity)) %>% 
+  mutate(pop_decile = ntile(popularity, n = 10)) %>% 
+  select(-popularity)
+
+pop_grouping %>% 
+  count(pop_decile)
+```
+
+## Accessability: Buses
+
+To count the number of buses each school have access to, let's take a look at the data. The `bus_desc` column is generally clean but I've highlighted some schools that have data which is rather messy e.g. Innova. 
+
+```{r}
+pri_sch %>%
+  select(school_name, bus_desc) %>%
+  head(n = 3) %>% 
+  #highlighting some messy data
+  bind_rows(pri_sch %>%
+              select(school_name, bus_desc) %>%
+              filter(
+                str_detect(school_name, "Compass|Innova|Northland|Sengkang|Xishan"))) %>% 
+  kable()
+
+```
+
+If I were to just pick out the numbers from the `bus_desc` column, thinking they were bus numbers, I would be correct for most columns. But you can see (above) that not all numbers represent bus numbers.  
+
+I'll use regular expressions (regex) to clean this up.
+
+```{r}
+bus_desc_regex <- pri_sch %>%
+  mutate(
+    bus_desc = str_to_lower(bus_desc),
+    bus_desc_clean = str_remove_all(bus_desc, "(ave|blk|st)[:blank:]?[:digit:]+.?[:blank:]?"),
+    #extra cleaning for Innova
+    bus_desc_clean = str_remove_all(bus_desc_clean, "[:digit:]+.?[:digit:]+[:blank:]?(am|pm|min)[:blank:]?"))
+```
+
+The before/after results of cleaning:
+
+```{r}
+bus_desc_regex %>% 
+  filter(str_detect(school_name, "Anderson|Springdale|Yangzheng|Hilda|Innova")) %>% 
+  select(school_name, bus_desc, bus_desc_clean) %>% 
+  distinct(school_name, .keep_all = TRUE) %>% 
+  kable()
+```
+
+Comparing `bus_desc` to `bus_desc_clean`, the numbers after any incidence of "ave" (shorthand for avenue), "blk" (shorthand for block) or "st" (shorth and for street) are removed. I also did one extra round of cleaning for Innova, and we see that the numbers before "am" (ante meridiem) and "pm" (post meridiem) are now removed too.  
+
+With that, numbers from `bus_desc_clean` column can be extracted and used as bus numbers associated with each primary school.
+
+```{r}
+buses_clean <- bus_desc_regex %>% 
+  #extract digits  
+  mutate(buses = str_extract_all(bus_desc_clean, "\\b[:digit:]+\\w*")) %>% 
+  unnest(buses) %>% 
+  group_by(school_name) %>% 
+  distinct(buses, .keep_all = TRUE) %>% 
+  ungroup()
+```
+
+```{r}
+set.seed(2020)
+
+sample <- buses_clean %>%
+  filter(str_detect(bus_desc, "[:lower:]")) %>%
+  distinct(school_name) %>%
+  slice_sample(n = 5) %>%
+  pull(school_name)
+
+buses_clean %>% 
+  filter(school_name %in% sample) %>%
+  select(school_name, bus_desc, buses) %>% 
+  kable()
+```
+
+That's all the data cleaning, right? Nope! Most of the bus numbers were able to be extracted, but there are false positives like zeroes - thanks to data entry errors (there is no bus 000 in Singapore)
+
+```{r}
+buses_clean %>% 
+  select(school_name, bus_desc, buses) %>% 
+  arrange(buses) %>% 
+  head(n = 10) %>% 
+  kable()
+```
+
+There are also no buses with more than four alphanumeric characters (to my knowledge).
+
+```{r}
+buses_clean %>% 
+  rowwise() %>% 
+  filter(nchar(buses) > 4) %>% 
+  select(school_name, bus_desc, buses) %>% 
+  kable()
+```
+
+For Junyuan primary school, the five digit numbers refers to the [bus stop number](https://bit.ly/2Sak5c2). Let's fix these.
+
+```{r}
+#manually removing
+buses_clean <- buses_clean %>% 
+  filter(!buses == "000",
+         nchar(buses) <= 4)
+```
+
+Were there any schools which did not have bus data extracted?
+
+```{r}
+pri_sch %>% 
+  anti_join(buses_clean, by = "school_name") %>% 
+  select(school_name, bus_desc)
+```
+
+More data entry errors - I'll leave these as it is for now, and do some feature imputing to replace these missing values later.
+
+```{r}
+bus_count <- buses_clean %>% 
+  group_by(school_name) %>% 
+  summarize(bus_count = n()) %>% 
+  ungroup()
+
+bus_count
+```
+
+Which primary schools have access to the most buses?
+
+```{r}
+bus_count %>% 
+  arrange(desc(bus_count)) %>% 
+  inner_join(pri_sch) %>% 
+  select(school_name, bus_count, bus_desc)
+```
+
+### Visualization
+
+The visualization of the relationships (interconnections) between the schools by the buses can be done using a network graph.
+
+```{r buses network graph}
+set.seed(2021)
+
+buses_clean %>% 
+  mutate(school_name = str_remove(school_name, "[:punct:]Primary[:punct:]"),
+         school_name = str_trim(str_remove(school_name, "School|Primary School"))) %>% 
+  pairwise_cor(school_name, buses, sort = TRUE) %>%
+  filter(correlation > 0.7) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation),
+                 edge_width = 1,
+                 show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 3) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    check_overlap = TRUE,
+    fontface = "bold",
+    vjust = "inward",
+    hjust = -0.2
+  ) +
+  labs(title = "Which primary schools share common buses?",
+       subtitle = "Darker lines indicates higher correlation.",
+       caption = "Source: data.gov.sg/dataset/school-directory-and-information") +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  )
+```
+
+Here's the Canberra/Endeavour/Northoaks/Sembawang pri school cluster on Google Maps: 
+
+![Sembawang cluster](https://raw.githubusercontent.com/DesmondChoy/DataSets/master/sembawang_cluster.png)
+
+## Accessability: MRT/LRT
+
+Let's do the same for MRT/LRT stations.
+
+```{r mrts messy}
+pri_sch %>%
+  select(school_name, mrt_desc) %>% 
+  head(n = 5) %>% 
+  #highlighting some messy data
+  bind_rows(pri_sch %>%
+              select(school_name, mrt_desc) %>%
+              filter(str_detect(
+                school_name, "Canossa|Gongshang|Junyuan|North Vista|Sembawang"))) %>% 
+  kable()
+```
+
+The data related to MRT descriptions is significantly messier than bus descriptions. Once again, I'll attempt to use regex to coherently extract MRT data from `mrt_desc`.  
+
+First off, `mrt_desc` includes which line the station is on e.g. downtown line. This is troublesome because there's also a station called Downtown. Picking up the words in this case would be double counting. Here, I'm removing words before "line". 
+
+```{r}
+mrt_clean <- pri_sch %>%
+  mutate(
+    mrt_desc = str_to_lower(mrt_desc),
+    mrt_desc_clean = str_remove_all(mrt_desc, "[:alpha:]+[:blank:]+line+")
+  )
+
+mrt_clean %>% 
+  filter(str_detect(mrt_desc, "line")) %>% 
+  select(school_name, mrt_desc, mrt_desc_clean) %>% 
+  kable()
+```
+
+Next, I found a list of [all MRT & LRT lines](https://data.gov.sg/dataset/train-station-chinese-names) online. 
+
+```{r}
+station_names <- read_csv("https://raw.githubusercontent.com/DesmondChoy/DataSets/master/train-station-chinese-names.csv") %>% 
+  select(-mrt_station_chinese, -mrt_line_chinese) %>% 
+  mutate(across(where(is.character), str_to_lower))
+
+station_names
+```
+
+Here's how I intend to identify each MRT/LRT station linked to each primary school: 
+
+* First, `unnest_tokens` to break down `mrt_desc` into 1, 2 and 3 tokens.
+* Then, inner join all tokens to the station names from `station_names`.
+
+Why 1, 2 and 3 tokens? Take a look at CHIJ St. Nic for example.
+
+```{r}
+mrt_clean %>% 
+  filter(str_detect(school_name, "Chij St. Nicholas Girls' School")) %>% 
+  select(school_name, mrt_desc_clean)
+```
+
+Breaking it down into one token, we get:
+
+```{r}
+mrt_clean %>% 
+  filter(str_detect(school_name, "Chij St. Nicholas Girls' School")) %>% 
+  unnest_tokens(word, mrt_desc, token = "ngrams", n = 1, drop = FALSE) %>%
+  select(school_name, mrt_desc, word)
+```
+
+Then inner joining to `station_names`:
+
+```{r}
+mrt_clean %>% 
+  filter(str_detect(school_name, "Chij St. Nicholas Girls' School")) %>% 
+  unnest_tokens(word, mrt_desc, token = "ngrams", n = 1, drop = FALSE) %>%
+  inner_join(station_names, by = c("word" = "mrt_station_english"))
+```
+
+No MRT stations were picked up because to obtain "ang mo kio" and "yio chu kang" required `ngrams = 3`. 
+
+```{r}
+mrt_clean %>% 
+  filter(str_detect(school_name, "Chij St. Nicholas Girls' School")) %>% 
+  unnest_tokens(word, mrt_desc, token = "ngrams", n = 3, drop = FALSE) %>%
+  inner_join(station_names, by = c("word" = "mrt_station_english")) %>% 
+  select(school_name, mrt_desc, word) %>% 
+  kable()
+```
+
+Note: Mayflower mrt wasn't picked up because it isn't listed in the `station_names` dataset.
+
+```{r}
+mrt_clean_id <- mrt_clean %>% 
+  unnest_tokens(word, mrt_desc, token = "ngrams", n = 1, drop = FALSE) %>%
+  inner_join(station_names, by = c("word" = "mrt_station_english")) %>%
+  bind_rows(
+    mrt_clean %>%
+    unnest_tokens(word, mrt_desc, token = "ngrams", n = 2, drop = FALSE) %>%
+    inner_join(station_names, by = c("word" = "mrt_station_english"))) %>% 
+  bind_rows(
+    mrt_clean %>%
+    unnest_tokens(word, mrt_desc, token = "ngrams", n = 3, drop = FALSE) %>%
+    inner_join(station_names, by = c("word" = "mrt_station_english"))) %>% 
+  distinct(school_name, word, .keep_all = TRUE) %>%
+  arrange(school_name)
+```
+
+Were there any schools which did not have mrt data extracted?
+
+```{r mrt error}
+pri_sch %>%
+  anti_join(mrt_clean_id %>%
+              distinct(school_name)) %>%
+  select(school_name, mrt_desc)
+```
+
+At this point, my mind has been calloused for data entry errors and shorthands used. Let's fix this and re-run our unnest token sequence.
+
+```{r}
+mrt_clean <- mrt_clean %>% 
+  mutate(mrt_desc = case_when(
+    school_name == "Nanyang Primary School" ~ "Farrer Road Mrt Station",
+    school_name == "Northshore Primary School" ~ "Punggol Point Lrt Station ",
+    school_name == "St. Gabriel's Primary School" ~ "Lorong Chuan Mrt Station",
+    TRUE ~ mrt_desc
+  ))
+
+mrt_clean_id <- mrt_clean %>% 
+  unnest_tokens(word, mrt_desc, token = "ngrams", n = 1, drop = FALSE) %>%
+  inner_join(station_names, by = c("word" = "mrt_station_english")) %>%
+  bind_rows(
+    mrt_clean %>%
+    unnest_tokens(word, mrt_desc, token = "ngrams", n = 2, drop = FALSE) %>%
+    inner_join(station_names, by = c("word" = "mrt_station_english"))) %>% 
+  bind_rows(
+    mrt_clean %>%
+    unnest_tokens(word, mrt_desc, token = "ngrams", n = 3, drop = FALSE) %>%
+    inner_join(station_names, by = c("word" = "mrt_station_english"))) %>% 
+  distinct(school_name, word, .keep_all = TRUE) %>%
+  arrange(school_name)
+```
+
+### Visualization
+
+```{r station network graph}
+set.seed(2021)
+
+mrt_clean_id %>% 
+  mutate(school_name = str_remove(school_name, "[:punct:]Primary[:punct:]"),
+         school_name = str_trim(str_remove(school_name, "School|Primary School"))) %>% 
+  pairwise_cor(school_name, word, sort = TRUE) %>%
+  filter(correlation > 0.8) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation),
+                 edge_width = 1,
+                 show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 3) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    check_overlap = TRUE,
+    fontface = "bold",
+    vjust = "inward",
+    hjust = -0.2
+  ) +
+  labs(title = "Which primary schools share common MRT/LRT stations?",
+       subtitle = "Darker lines indicates higher correlation.",
+       caption = "Source: data.gov.sg/dataset/school-directory-and-information") +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  )
+```
+
+```{r}
+mrt_count <- mrt_clean_id %>% 
+  group_by(school_name) %>% 
+  summarize(station_count = n()) %>% 
+  ungroup()
+
+mrt_count
+```
+
+## Final features
+
+Let's merge all the features together...
+
+```{r}
+final_features <- features %>%
+  left_join(affiliation %>%
+              mutate(affiliated = 1)) %>% 
+  mutate(affiliated = replace_na(affiliated, 0)) %>% 
+  inner_join(pop_grouping) %>% 
+  left_join(bus_count) %>% 
+  left_join(mrt_count)
+
+final_features %>% 
+  slice_sample(n = 10)
+```
+
+These will be the data points when performing clustering on `pri_sch`. 
+
+```{r}
+glimpse(final_features)
+```
+
+# Clustering
+
+Clustering is a form of unsupervised machine learning algorithm that's used with unlabeled data. There are a multitude of clustering methods - below I opt to use a popular clustering technique called k-means - it aims to partition the data into clusters and consequently generate labels that groups similar primary schools together.
+
+Illustration below by Allison Horst:
+
+![k-means](https://www.tidymodels.org/learn/statistics/k-means/kmeans.gif)
+
+## Pre-processing
+
+The data in `final_features` needs to be pre-processed before we can cluster: 
+
+* `step_dummy`: Converts nominal data (e.g. character or factors) into numeric (kmeans can only take numeric data)
+* `step_normalize`: Transforms numeric data to have a standard deviation of one and a mean of zero. Used as a pre-processor as k-means is sensitive to outliers.  
+
+
+```{r}
+scaled_features <- final_features %>% 
+  recipe( ~ .) %>% 
+  update_role(school_name, new_role = "id") %>% 
+  step_impute_bag(bus_count, station_count, trees = 100, seed_val = 2021) %>% 
+  step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
+  step_normalize(all_predictors()) %>% 
+  prep() %>% 
+  juice()
+  
+```
+
+```{r}
+final_features %>% 
+  filter(str_detect(school_name, "Tanjong Katong|Valour")) %>% 
+  select(school_name, bus_count, station_count)
+
+scaled_features %>%
+  filter(str_detect(school_name, "Tanjong Katong|Valour")) %>%
+  select(school_name, bus_count, station_count)
+```
+
+## How many clusters are appropriate?
+
+Because I don't know _a priori_ how many clusters are ideal, I'll test out 2-10 clusters and subsequently proceed to conduct further analysis.   
+
+Tidymodels has a [great section](https://www.tidymodels.org/learn/statistics/k-means/) on how the library `broom` can be leveraged to visualize clustering results.   
+
+```{r}
+points <- scaled_features %>% 
+  select(-school_name)
+
+set.seed(2021)
+kclusts <-
+  tibble(k = 2:20) %>%
+  mutate(
+    kclust = map(k, ~ kmeans(points, .x)),
+    tidied = map(kclust, tidy),
+    glanced = map(kclust, glance),
+    augmented = map(kclust, augment, points)
+  )
+
+kclusts
+```
+
+For each combination of clusters, `augment` returns the original 186 points from the original data `scaled_features`. This can be used to assess how the clusters are mapped across, say, `pop_decile`.
+
+`glance` extracts a single row summary of each combination of clusters, and allows the plotting of the total within-cluster sum of square (WSS). WSS measures the compactness of the clustering and the idea is the ideal number of clusters should minimize WSS. 
+
+```{r}
+kclusts %>%
+  unnest(cols = c(glanced)) %>% 
+  ggplot(aes(k, tot.withinss)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = seq(0, 20, 2))
+```
+
+Plotting out the WSS across 2-20 clusters, there is a slight  [elbow/bend](https://uc-r.github.io/kmeans_clustering#elbow) after cluster 7 - indicating additional clusters beyond that will provide lesser incremental improvement to minimizing WSS. Also interesting to note that increasing cluster size from 14 -> 15 actually increases WSS, but then decreases at 16.
+
+For now, let's go with 7 clusters.
+
+```{r}
+set.seed(2020)
+
+final_cluster <- scaled_features %>% 
+  select(-school_name) %>% 
+  kmeans(centers = 7, iter.max = 20)
+
+final_cluster %>% 
+  augment(final_features) %>% 
+  count(.cluster)
+```
+
+There is a major cluster (Cluster 1) that comprises of 123 schools, or 66% of our total schools. There are also three medium clusters (Cluster 2, 5, and 7) and three smaller clusters (Cluster 3, 4 and 6).
+
+## Cluster analysis
+
+Let's use [waffle](https://github.com/hrbrmstr/waffle) charts (from the `waffle` library) to visualize how the clusters are distributed.
+
+```{r}
+final_cluster %>%
+  augment(final_features) %>%
+  count(pop_decile, .cluster) %>% 
+  ggplot(aes(fill = .cluster, values = n)) +
+  geom_waffle(color = "white",
+              size = .25,
+              n_rows = 5) +
+  facet_wrap( ~ pop_decile, ncol = 5) +
+  scale_fill_tableau() +
+  coord_equal() +
+  labs(title = "Cluster distribution by popularity decile",
+       subtitle = "Cluster 5 seems to have a slightly disproportionate weighting\nin the highest popularity decile",
+       fill = "Cluster #") +
+  theme_enhance_waffle() +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  ) 
+```
+
+```{r}
+final_cluster %>%
+  augment(final_features) %>%
+  count(zone_code, .cluster) %>% 
+  ggplot(aes(fill = .cluster, values = n)) +
+  geom_waffle(color = "white",
+              size = .25,
+              n_rows = 5) +
+  facet_wrap( ~ zone_code, ncol = 2) +
+  scale_fill_tableau() +
+  coord_equal() +
+  labs(title = "Cluster distribution by zone code",
+       subtitle = "Clusters 3/4 & clusters 6/7 are exclusive to the\nNorth and East zones respectively",
+       fill = "Cluster #") +
+  theme_enhance_waffle() +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15),
+  ) 
+```
+
+```{r}
+final_cluster %>%
+  augment(final_features) %>%
+  count(dgp_code, .cluster) %>%
+  ggplot(aes(fill = .cluster, values = n)) +
+  geom_waffle(color = "white",
+              size = 0.5,
+              n_rows = 3) +
+  facet_wrap( ~ dgp_code, ncol = 9) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  scale_fill_tableau() +
+  coord_equal() +
+  labs(title = "Cluster distribution by zone code",
+       subtitle = "Once again, certain clusters are found only in certain exclusive dgb_code areas",
+       fill = "Cluster #") +
+  theme_enhance_waffle() +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 10),
+  )
+```
+
+# Explore clusters via an interactive table
+
+I made a simple table with filters, should you wish to explore the clusters. How I would recommend using this table: 
+
+* If you've already shortlisted some schools, type in the school name and see which cluster the school is in. Then compare it to other schools within that cluster.   
+
+* If you haven't yet identified a school, perhaps filter by location (zone/urban area) first, identify clusters in the area, then compare schools within those clusters.
+
+```{r}
+cluster_data <- final_cluster %>%
+  augment(final_features) %>% 
+  relocate(.cluster)
+
+data <- SharedData$new(cluster_data)
+
+bscols(
+  widths = c(2, 10),
+  list(
+    filter_checkbox("type", "Cluster", data, ~ .cluster),
+    filter_select("type", "School", data, ~ school_name),
+    filter_checkbox("type", "Zone", data, ~ zone_code),
+    filter_select("type", "Urban area", data, ~ dgp_code)
+  ),
+  reactable(
+    data,
+    defaultColDef = colDef(headerStyle = list(background = "#00AFBB")),
+    showPageSizeOptions = TRUE,
+    pageSizeOptions = c(5, 10, 20),
+    defaultPageSize = 10,
+    filterable = TRUE,
+    minRows = 5,
+    highlight = TRUE,
+    striped = TRUE,
+    paginationType = "simple",
+    theme = reactableTheme(
+      borderColor = "#dfe2e5",
+      stripedColor = "#f6f8fa",
+      highlightColor = "#f0f5f9",
+      cellPadding = "8px 12px",
+      style = list(fontFamily = "Helvetica"),
+      searchInputStyle = list(width = "100%")
+    )
+  )
+)
+```
+
+# Conclusion
+
+It was interesting to see the partitions created by k-means, and visualizing the various dimensions via waffle plots. However, as the number of features expand, performance of k-means tends to break down and the approach loses its effectiveness.   
+
+A solution I've learnt recently is [spectral clustering](https://developers.google.com/machine-learning/clustering/algorithm/advantages-disadvantages#:~:text=Spectral%20clustering%20avoids%20the%20curse%20of%20dimensionality%20by%20adding%20a%20pre-clustering%20step%20to%20your%20algorithm%3A), a pre-processing step that utilizes dimension reduction techniques such as PCA, followed by the clustering algorithm of your choice.

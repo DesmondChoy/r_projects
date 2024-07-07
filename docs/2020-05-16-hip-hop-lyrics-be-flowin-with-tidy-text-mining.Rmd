@@ -1,0 +1,526 @@
+---
+title: Hip-Hop Lyrics Be Flowing with Tidy Text Mining
+author: Desmond Choy
+date: '2020-05-16'
+slug: hip-hop-lyrics-be-flowin-with-tidy-text-mining
+summary: Hip-hop songs' sentiment is extracted and visualized. Regularized regression is then trained on lyrics to predict if a hip-hop song was old school (released before the year 2000) or modern.
+readingtime: '10'
+tags:
+  - EDA
+  - machine learning
+  - r
+  - visualization
+  - NLP
+coverImage: https://images.unsplash.com/photo-1508973379184-7517410fb0bc?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=1050&q=80
+thumbnailImage: https://images.unsplash.com/photo-1589929168117-cd9ec5f27ab7?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=675&q=80
+thumbnailImagePosition: left
+coverCaption: Hip hop By Joel Muniz
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE)
+```
+
+I've been hit with a double dose of NLP inspiration after reading a recent Julia Silge [blog post](https://juliasilge.com/blog/animal-crossing/) and watching a [Datacamp video](https://learn.datacamp.com/courses/sentiment-analysis-in-r-the-tidy-way) on Tidy Text Mining which she used to teach. Ergo, this post will set out to do two things: use sentiment analysis to explore hip-hop songs, and subsequently use the tidymodels package on the lyrics to predict which era (Old School versus Modern) the songs came from. 
+
+The new [tidymodels website](https://www.tidymodels.org) was launched recently and contains a wealth of information - explaining in detail the main functions of each package and how the ecosystem operates. Prior to the launch of the website, I was already getting my feet wet in a [previous blog post](https://desmondchoy.netlify.app/2020/04/food-consumption-and-co2-emissions/) where I did some predictive modelling with tidymodels.  
+
+Here I intend to explore the ecosystem further and utilise `workflows` and `tune` package. The former has functions to bundle your pre-processing, modeling, and post-processing together, while the latter is meant for optimization of model's hyperparameters as well as pre-processing steps.  
+
+```{r}
+library(tidyverse)
+theme_set(theme_minimal())
+```
+
+
+## Data Set
+
+This dataset comes once again from [a recent TidyTuesday](https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-04-14/readme.md). BBC Music asked more than 100 critics, artists, and other music industry folks from 15 countries for their five favorite hip-hop tracks and this data contains said polling results. To be clear, these are not the final results of the poll but an aggregation of their top five submissions.
+
+```{r}
+polls <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-04-14/polls.csv')
+polls
+```
+
+## Data Cleaning
+
+Let's remove the duplicate entries, remove columns I won't be using, and create our two buckets - "Old School" for hip-hop songs released before the year 2000, and "Modern" for  songs released after 2000. 
+
+```{r}
+sorted <- polls %>%
+  distinct(title, .keep_all = TRUE) %>%
+  mutate(bucket = case_when(year < 2000 ~ "Old School",
+                            TRUE ~ "Modern")) %>%
+  select(-contains("critic"), -rank)
+
+sorted
+```
+
+Our dataset now contains a total of 309 unique songs with a fairly even mix across Modern and Old School. I kept the `gender` column because it could yield some predictive power.
+
+```{r}
+sorted %>% 
+  distinct(title, .keep_all = TRUE) %>% 
+  count(bucket, gender)
+```
+
+## Obtaining Lyrics
+
+Using the `genius` package from [Josiah Parry](https://github.com/josiahparry/genius), the `add_genius` function is able to pull lyrics for song/album by specifying the artist and the title. Note:  Pulling lyrics for 309 songs took slightly over 12 minutes and not all lyrics were successfully retrieved. You can choose to use the code I hash-tagged out, or the resultign dataframe that I uploaded to my GitHub.
+
+```{r}
+library(genius)
+
+#lyrics <- sorted %>% add_genius(artist, title, type = "lyrics")
+
+lyrics <- read_csv("https://raw.githubusercontent.com/DesmondChoy/DataSets/master/lyrics.csv")
+```
+
+From an initial size of 309 songs, `add_genius` only managed to return lyrics for 142 songs. Let's also remove NA values.
+
+```{r}
+lyrics %>%
+  distinct(title, .keep_all = TRUE)
+
+lyrics <- lyrics %>% 
+  na.omit()
+```
+
+
+## Text Mining using Tidy Data Principles
+
+The process of [tidy text mining](https://www.tidytextmining.com/index.html) is as such:  
+
+* To make the lyrics dataset tidy, we need to restructure it in the **one-token-per-row** format using the `unnest_tokens()` function  
+* Next, remove Stop Words - words that are not useful for an analysis, typically extremely common words such as *the*, *of*, *to*, and so forth in English. The `stop_words` dataset in the tidytext package contains stop words from three lexicons.  
+* Removal of stop words is done using `anti-join()`  
+* Finally, merge the dataframe with a lexicon using `inner_join()`
+
+Here, the NRC lexicon by [Saif Mohammad](https://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm) is used.  The NRC lexicon categorizes words in a binary fashion (*yes*, *no*) into categories of positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust.  
+
+```{r}
+library(tidytext)
+library(textdata)
+
+tidy_lyrics <- lyrics %>% 
+  unnest_tokens(word, lyric) %>% 
+  anti_join(stop_words, by = "word") %>% 
+  inner_join(get_sentiments("nrc")) %>% 
+  select(-track_title) #repeated column
+
+tidy_lyrics %>% 
+  select(word, sentiment, line, title, artist, bucket) %>% 
+  sample_n(10)
+```
+
+Let's peek at the top words used in our songs.
+
+```{r}
+tidy_lyrics %>% 
+  count(word, sort = TRUE) 
+```
+
+To get a sense of which are the primary emotions in each songs, let's calculate the total number of words in each song, and from there calculate the percentage of each emotion using the total number of words.
+
+```{r}
+#Calculating total words per song
+totals <- tidy_lyrics %>% 
+  count(title) %>% 
+  rename(total_words = n)
+
+#Joining it back to the original dataframe
+lyrics_count <- tidy_lyrics %>% 
+  left_join(totals, by = "title")
+
+```
+
+Which songs have the highest proportion of negative words?
+
+```{r}
+lyrics_count %>% 
+  filter(sentiment == "negative") %>% 
+  count(title, sentiment, total_words) %>% 
+  ungroup() %>% 
+  mutate(percent = n/total_words) %>% 
+  arrange(desc(percent))
+  
+```
+
+Let's visualise it across some of the other emotions provided by NRC lexicon.
+
+```{r fig.width = 12, fig.height = 10}
+lyrics_count %>%
+  filter(
+    sentiment %in% c("positive", "negative", "joy", "fear", "anger", "trust"),
+    total_words > 10
+  ) %>%
+  count(title, sentiment, total_words, artist) %>%
+  mutate(percent = n / total_words,
+         title = paste(artist, title, sep = " - ")) %>%
+  arrange(desc(percent)) %>%
+  group_by(sentiment) %>%
+  slice(1:10) %>%
+  ggplot(aes(reorder_within(title, percent, sentiment), percent, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(
+    . ~ fct_relevel(sentiment, "positive", "negative", "joy", "fear", "trust"),
+    scales = "free",
+    ncol = 2
+  ) +
+  coord_flip() +
+  scale_x_reordered() +
+  scale_y_continuous(labels = scales::label_percent(accuracy = 1)) +
+  labs(
+    x = "",
+    y = "Percentage of song's lyrics in each category",
+    title = "Tidy Text Mining: Using Sentiment Analysis to Group Hip-Hop Songs across Emotions",
+    subtitle = "Selected Hip-Hop Songs from BBC Poll; Categories from NRC Emotion Lexicon; Lyrics from Genius package"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.title.position = "plot",
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15)
+  )
+  
+```
+
+Data is wrangled further with `count()` and `pivot_wider()` to obtain a sentiment score. With the score, we can now visualise how sentiment (positive/negative) changes across ten randomly sampled rap songs. 
+
+```{r fig.width = 12, fig.height = 10}
+song_sentiment <- tidy_lyrics %>%
+  count(title, artist, index = line %/% 4, sentiment) %>%
+  pivot_wider(
+    names_from = sentiment,
+    values_from = n,
+    values_fill = list(n = 0)) %>% 
+  mutate(sentiment = positive - negative)
+
+set.seed(2000)
+sample <- song_sentiment %>% 
+  distinct(title) %>% 
+  sample_n(10) %>% 
+  pull(title)
+  
+song_sentiment %>%
+  filter(title %in% sample) %>%
+  mutate(title = paste(artist, title, sep = " - ")) %>%
+  ggplot(aes(index, sentiment, fill = title)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(. ~ title, ncol = 2, scales = c("free")) +
+  labs(
+    x = "Duration",
+    y = "Sentiment Score",
+    title = "Visualising Sentiment Scores for 10 randomly selected hip-hop songs",
+    subtitle = "Positive scores indicate positive sentiment, and vice versa."
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.title.position = "plot",
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15)
+  )
+
+```
+
+## Modelling
+
+We begin our modelling process that aims to predict if a hip-hop song is Old School (released before the year 2000) or Modern (released in the year 2000 or later) by using feature engineering on its lyrics as well as artist gender.
+
+## Data Splitting
+
+```{r}
+library(tidymodels)
+
+set.seed(2000)
+hiphop_split <- initial_split(lyrics, strata = bucket)
+hiphop_split
+
+hiphop_train <- training(hiphop_split)
+hiphop_test <- testing(hiphop_split)
+
+```
+
+## Resampling
+
+Since we plan on doing some hyperparameter tuning, we will need resampled data.
+
+```{r}
+set.seed(2000)
+folds <- vfold_cv(hiphop_train, v = 10)
+folds
+
+```
+
+## Model Specification
+
+Let's use a [LASSO](https://bradleyboehmke.github.io/HOML/regularized-regression.html) (least absolute shrinkage and selection operator) regression model, which has two tuning hyperparameters:  
+* **Penalty**: The total amount of regularization in the model. This is set to `tune()`, a placeholder that will be determined subsequently by tuning.  
+* **Mixture**: The proportion of L1 regularization in the model. Setting Mixture to 1 makes it a LASSO model.
+
+```{r}
+lr_model <- logistic_reg(penalty = tune(),
+                         mixture = 1) %>% 
+  set_engine("glmnet")
+```
+
+## Feature Pre-processing
+
+Here we begin to do some processing on the lyrics that we previously pulled:  
+
+* step_tokenize: Similar to `unnest_tokens()`; this tokenizes our lyrics. The default option is used where words are broken down into single words (as opposed to n-grams or multiple words)
+* step_stopwords: Similar to `anti-join(stop_words)`
+* step_tokenfilter: We keep the top 2000 most-used tokens after accounting for the removal of stop words
+* step_tfidf: The statistic [tf-idf](https://www.tidytextmining.com/tfidf.html), or term frequency multiplied by inverse document frequency, identifies words that are important to one document within a collection of documents.
+* step_normalize: Once the words have been converted to tf-idf values, they will then be centered and scaled i.e. normalized. This is important as the LASSO model is not robust to outliers.
+* step_dummy: Standard practise to convert factor/character columns (such as our  `gender` bucket) to [dummy variables](https://bookdown.org/max/FES/creating-dummy-variables-for-unordered-categories.html) to make them numeric. 
+
+```{r}
+library(textrecipes)
+
+hiphop_rec <- hiphop_train %>%
+  recipe(bucket ~ lyric + gender) %>%
+  step_tokenize(lyric) %>%
+  step_stopwords(lyric) %>%
+  step_tokenfilter(lyric, max_tokens = 2000) %>%
+  step_tfidf(lyric) %>%
+  step_normalize(all_predictors(),-gender) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+prep(hiphop_rec) 
+```
+
+## Workflows
+
+We next use the `workflows` package to bundle our model and recipes. Personally I'm  rather excited after this package as it has not only has great synergy with the ecosystem, but it makes the process cleaner and more intuitive - especially compared to my previous [tidymodels post](https://desmondchoy.netlify.app/2020/04/food-consumption-and-co2-emissions/).
+
+```{r}
+lr_wflow <- workflow() %>% 
+  add_model(lr_model) %>% 
+  add_recipe(hiphop_rec)
+  
+lr_wflow
+```
+
+## Tuning
+
+Recall the penalty hyperparamter in our model was given the placeholder `tune()`. To find an optimal value, we first create a set of possible regularization parameters to conduct a grid search.
+
+```{r}
+grid <- grid_regular(penalty(), levels = 40)
+```
+
+Together with our resampled tibble created earlier, we can begin tuning. We can further specify relevant metrics - in this case, `roc_auc`, positive predictive value (`ppv`), negative predictive value (`npv`), and mean log loss (`mn_log_loss`) which takes into account the uncertainty in the prediction and gives a more detailed view into the actual performance.
+
+```{r}
+#doParallel::registerDoParallel()
+#Step recommended by Julia Silge. Gives me an error on my Windows PC but perhaps it works on Mac?
+
+set.seed(2000)
+lr_grid <- tune_grid(
+  lr_wflow,
+  resamples = folds,
+  grid = grid,
+  metrics = metric_set(roc_auc, npv, ppv, mn_log_loss))
+
+```
+
+With our tuning results, we use `collect_metrics()` and visualize our findings.
+
+```{r}
+lr_grid %>%
+  collect_metrics() %>%
+  ggplot(aes(penalty, mean, color = .metric)) +
+  geom_line(size = 1.5, show.legend = FALSE) +
+  facet_wrap(. ~ .metric, nrow = 4) +
+  scale_x_log10(label = scales::number_format())
+
+```
+
+It does seem the optimal penalty value is below 0.01 - a higher mean is better for npv, ppv and roc_auc, while a lower mean is better for the log_loss metric. Beyond that, the trade-off is ppv gets better while the other three metrics suffer.     
+
+Using `show_best()`, we can see the optimal penalty values of roc_auc and mn_log_loss. 
+
+```{r}
+lr_grid %>%
+  show_best("mn_log_loss") %>%
+  slice(1:3) %>%
+  bind_rows(lr_grid %>%
+              show_best("roc_auc") %>%
+              slice(1:3))
+```
+
+I will go with the penalty value that maximises roc_auc, since it corresponds to the penalty value associated with the second lowest log_loss mean. Updating the workflow with our tuned hyperparamter value is done using `finalize_workflow()`.
+
+```{r}
+best_auc <- lr_grid %>%
+  select_best("roc_auc")
+
+final_lr <- lr_wflow %>%
+  finalize_workflow(best_auc)
+final_lr
+
+```
+
+## Fitting / Visualizing The Results
+
+After fitting the model to the training data, let's take a look at variable importance i.e. which words had the highest predictive power.
+
+```{r fig.width = 12, fig.height = 10}
+library(vip)
+
+labels <- c(`NEG` = "Modern",
+            `POS` = "Old School")
+
+final_lr %>%
+  fit(hiphop_train) %>%
+  pull_workflow_fit() %>%
+  vi(lambda = best_auc$penalty) %>%
+  group_by(Sign) %>%
+  top_n(15, wt = abs(Importance)) %>%
+  ungroup() %>%
+  mutate(
+    Importance = abs(Importance),
+    Variable = str_remove(Variable, "tfidf_lyric_"),
+    Variable = fct_reorder(Variable, Importance)
+  ) %>%
+  ggplot(aes(x = Importance, y = Variable, fill = Sign)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap( ~ Sign, scales = "free", labeller = as_labeller(labels)) +
+  labs(y = NULL,
+       title = "Hip-hop lyrics with the highest importance when determining the era of a song",
+       subtitle = "Modern: Released in 2000 or after; Old School: Songs released before 2000") +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.title.position = "plot",
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15)
+  )
+
+```
+
+`gender_mixed` immediately stands out as an outlier. Taking a look at lyrics data once more, it is now apparent why `gender_mixed` contributed improportionately. Out of all of the songs that were tagged as `gender_mixed`, lyrics were only pulled for one!  
+
+That means the entire dataset only had one datapoint tagged as `gender_mixed` - making it an unreliable predictor. As unfortunate as this, this serves as an excellent learning example for myself of the importance of data visualization and variable importance.
+
+```{r}
+lyrics %>% 
+  distinct(title, bucket, gender) %>% 
+  count(bucket, gender)
+```
+
+## Re-fitting the Model
+
+Because of this anomality in gender training data, I'll remove gender as a predictor and re-run the entire process.
+
+```{r}
+#update recipe
+hiphop_rec_v2 <- hiphop_train %>%
+  recipe(bucket ~ lyric) %>%
+  step_tokenize(lyric) %>%
+  step_stopwords(lyric) %>%
+  step_tokenfilter(lyric, max_tokens = 2000) %>%
+  step_tfidf(lyric) %>%
+  step_normalize(all_predictors())
+
+#update workflow
+lr_wflow_v2 <- lr_wflow %>%
+  update_recipe(hiphop_rec_v2)
+
+#re-tune
+set.seed(2000)
+lr_grid_v2 <- tune_grid(
+  lr_wflow_v2,
+  resamples = folds,
+  grid = grid,
+  metrics = metric_set(roc_auc, npv, ppv, mn_log_loss))
+
+#visualization
+lr_grid_v2 %>% 
+  collect_metrics() %>% 
+  ggplot(aes(penalty, mean, color = .metric)) +
+  geom_line(size = 1.5, show.legend = FALSE) +
+  facet_wrap(. ~ .metric, nrow = 4) +
+  scale_x_log10(label = scales::number_format())
+```
+
+Optimal penalty parameter of 0.0273 remains unchanged. 
+
+```{r}
+lr_grid_v2 %>%
+  show_best("mn_log_loss") %>%
+  slice(1:3) %>% 
+  bind_rows(lr_grid_v2 %>%
+              show_best("roc_auc") %>%
+              slice(1:3))
+
+best_auc_v2 <- lr_grid_v2 %>% 
+  select_best("roc_auc")
+
+final_lr_v2 <- lr_wflow_v2 %>% 
+  finalize_workflow(best_auc_v2)
+
+```
+
+## Visualizing Results Once More
+
+After filtering for stop words, we used tf-idf as one of our recipe steps to extract importance. The [idea behind tf-idf](https://www.tidytextmining.com/tfidf.html#the-bind_tf_idf-function) is to find the important words for the content of each document by decreasing the weight for commonly used words and increasing the weight for words that are not used very much in a collection  of documents. **Calculating tf-idf attempts to find the words that are important (i.e. common) in a text, but not too common**.  
+
+```{r fig.width = 12, fig.height = 10}
+final_lr_v2 %>%
+  fit(hiphop_train) %>%
+  pull_workflow_fit() %>%
+  vi(lambda = best_auc$penalty) %>%
+  group_by(Sign) %>%
+  top_n(15, wt = abs(Importance)) %>%
+  ungroup() %>%
+  mutate(
+    Importance = abs(Importance),
+    Variable = str_remove(Variable, "tfidf_lyric_"),
+    Variable = fct_reorder(Variable, Importance)
+  ) %>%
+  ggplot(aes(x = Importance, y = Variable, fill = Sign)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Sign, scales = "free", labeller = as_labeller(labels)) +
+  labs(y = NULL,
+       title = "Hip-hop lyrics with the highest importance when determining the era of a song",
+       subtitle = "Modern: Released in 2000 or after; Old School: Songs released before 2000") +
+  theme(
+    plot.title = element_text(face = "bold", size = 20),
+    plot.title.position = "plot",
+    plot.subtitle = element_text(size = 15),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 15)
+  )
+
+```
+
+## Final fit on Test Data
+
+Now we perform the final fit using `last_fit()` to evaluate our model on the test data. Somewhat counter-intuitively, `last_fit()` is fitted onto our initial split data instead of test data.
+
+```{r}
+hiphop_final <- final_lr_v2 %>% 
+  last_fit(hiphop_split)
+
+hiphop_final %>% 
+  collect_metrics()
+
+```
+
+## Conclusion
+
+How did our model do? Our LASSO model, post tuning, gave a roc_auc mean of 0.78, while performance on test data was 0.778 - indicating we did not overfit. While I wouldn't say performance is excellent, the model did perform better than random chance (46%/54% chance to pick Modern/Old School). Some considerations which could increase performance: Trying other models, increasing the number of tokens, and increasing the sample size of songs.
+
+```{r}
+lyrics %>% 
+  count(bucket) %>% 
+  mutate(percent = n/sum(n))
+```
+
+Writing and re-iterating through this blog post was fascinating and educational - giving me  preliminary insight to the domain of NLP and another opportunity to familiarise myself with `tidymodels`. Lastly, the tidy text mining workflow is testament to how robust the `dplyr` package is when it comes to data wrangling.

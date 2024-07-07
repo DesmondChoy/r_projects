@@ -1,0 +1,504 @@
+---
+title: Oil and Gas Sector 2019 (Part II)
+author: Desmond Choy
+date: '2019-12-31'
+slug: oil-and-gas-sector-2019-part-ii
+categories: []
+tags:
+  - r
+  - fixed income
+  - EDA
+  - visualization
+keywords:
+  - tech
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 15,
+  fig.height = 12)
+```
+
+Continuing on from [Part I](https://desmondchoy.netlify.com/2019/12/oil-and-gas-sector-2019-part-i/) of this analysis, we move on Part II.
+
+* Part I: Data Importing and Wrangling (Tidying)
+* Part II: Exploratory Data Analysis and interpretation of results
+
+If you wish to replicate my findings, the raw Bloomberg data is available at my [github](https://github.com/DesmondChoy/glaciers/tree/master/content/post).  
+
+> Disclaimer
+
+All data that I have used in this presentation is obtained from Bloomberg and I do not own any of it. Nothing in this document should be construed as investment advice, recommendations, an investment strategy, or whether or not to "buy", "sell" or "hold" an investment,  nor should it be construed or relied upon as tax, regulatory or accounting advice.
+
+```{r Libraries, warning=FALSE, message=FALSE, echo=FALSE}
+library(readxl) #data importing
+library(tidyverse) #data wrangling
+library(magrittr) #data wrangling
+library(lubridate) #date manipulation
+library(hrbrthemes) #ggplot themes
+library(ggrepel) #ggplot identification of data points
+```
+
+```{r Importing, echo=FALSE}
+Sectors <- read_xlsx("Sectors.xlsx", na = "NA")
+Sectors <- Sectors[-c(1:3),]
+Periods <- read_xlsx("Periods.xlsx", na = "NA")
+Periods <- Periods[-c(1:3),]
+Energy <- left_join(Sectors, Periods)
+Energy <- distinct(Energy, CUSIP, .keep_all = TRUE)
+names(Energy) <- tolower(gsub("\\s", "\\.", names(Energy))) 
+```
+
+
+```{r Tidying, echo=FALSE}
+Energy$bloomberg.composite.rating <-
+  as_factor(Energy$bloomberg.composite.rating) %>%
+  factor(levels = c("AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-", "BB+", "NR"))
+Energy$ticker <- str_extract(Energy$security, "^\\w+")
+Energy$year <- str_extract(Energy$security, "\\d\\d$")
+Energy$coupon <- str_extract(Energy$security, "\\s.+\\s")
+Energy$maturity <- as.numeric((mdy(str_extract(Energy$security, "\\d+/.+$")) - today())/365)
+
+Energy$`moody's.rating` <- as_factor(Energy$`moody's.rating`)
+Energy$`s&p.rating` <- as_factor(Energy$`s&p.rating`)
+Energy$crncy <- as_factor(Energy$crncy)
+Energy$bclass.level.4.classification.name <-
+  as_factor(Energy$bclass.level.4.classification.name) %>%
+  factor(
+    levels = c(
+      "Integrated",
+      "Independent",
+      "Midstream",
+      "Refining",
+      "Oil Field Services",
+      "Government Owned, No Guarantee"
+    )
+  )
+```
+
+
+```{r Wrong Sectors, echo=FALSE}
+Energy <- Energy %>% 
+  filter(!ticker %in% c("PAA", "BHI", "SLB", "HAL"))
+
+```
+
+```{r Tidying Sectors, echo=FALSE}
+#Fixing "Govt" sectors, TOPTB/VLO, and STOAU
+Energy$bclass.level.4.classification.name[Energy$ticker %in% c("SINOPE", "CNPCCH", "PETMK", "PTTTB")] <- "Integrated"
+Energy$bclass.level.4.classification.name[Energy$ticker %in% c("CNOOC", "STOAU")] <- "Independent"
+Energy$bclass.level.4.classification.name[Energy$ticker == "TOPTB"] <-
+  "Refining"
+Energy$bclass.level.4.classification.name[Energy$ticker == "VLO"] <-
+  "Refining"
+Energy$bloomberg.composite.rating[Energy$ticker == "STOAU"] <- "BBB-"
+```
+
+
+```{r Assigning Regions, echo=FALSE}
+US <- c("CVX", "XOM", "CNQCN", "COP", "MRO", "OXY", "ENBCN", "KMI", "ETP", "MPC", "OKE")
+EU <- c("BPLN", "ENIIM", "RDSALN", "TOTAL")
+Asia <- c("CNOOC", "CNPCCH", "PETMK", "PTTEPT", "PTTTB", "SINOPE", "TOPTB")
+AU <- c("STOAU", "WPLAU", "APAAU")
+Energy$region <- if_else(Energy$ticker %in% US, "US",
+                         if_else(Energy$ticker %in% EU,"EU",
+                         if_else(Energy$ticker %in% Asia, "Asia",
+                         "AU")))
+
+```
+
+
+```{r Importing fundamental data, message=FALSE, echo=FALSE}
+Spreads <- Energy %>%
+  group_by(bclass.level.4.classification.name,
+           bloomberg.composite.rating,
+           ticker,
+           region) %>%
+  summarise(n = n()) %>%
+  select(ticker,
+         bclass.level.4.classification.name,
+         bloomberg.composite.rating,
+         region,
+         n)
+
+#Wrangling: Credit Metrics 
+Metrics <-
+  excel_sheets("Credit Metrics.xlsx") %>%
+  map(
+    ~ read_xlsx(
+      "Credit Metrics.xlsx",
+      .,
+      range = "L1:S27",
+      na = "#N/A N/A"
+    )
+  )
+
+for (i in seq(Metrics)) {
+  Metrics[[i]][,2] <- NULL
+}
+colname <-
+  c("ticker", "2014", "2015", "2016", "2017", "2018", "Jun 2019")
+header <-
+  c("Leverage", "Net.leverage", "Gearing", "Capex.to.sales", "CFO",
+    "Capex", "Dvd", "ShareRep", "RCF.net.debt", "Int.cov")
+Metrics <- map(Metrics, setNames, colname)
+
+#This next part of code is extremely unelegant and messy... but it gets the job done
+Metrics <- map2_dfc(Metrics, header, 
+                    ~ pivot_longer(.x, -ticker, names_to = "Period", values_to = .y)) %>% 
+  select(c(1:3, 6, 9, 12, 15, 18, 21, 24, 27, 30))
+
+Metrics <- inner_join(Metrics, Spreads)
+names(Metrics) <- tolower(gsub("\\s", "\\.", names(Metrics)))
+
+```
+
+
+```{r Parameters, echo=FALSE}
+Rating <- c("AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-")
+
+Energy <- Energy %>%
+  filter(
+      crncy == "USD" &
+      bloomberg.composite.rating %in% Rating &
+      coupon.type == "FIXED")
+```
+
+# Data Visualization: Fundamental Metrics
+
+I have now tidied up the raw data and will attempt to visualize a comparison of the companies across four fundamental credit metrics:  
+
+* Leverage  
+* Gearing  
+* RCF/Net Debt  
+* Capex/Sales 
+
+> Leverage
+
+Defined as Debt/EBITDA, leverage is a fundamental metric commonly used to identify a company's level of indebtedness relative to its earnings. Its advantage is that it can be used across sectors and subsectors.  
+
+Here I note leverage peaked in 2016 - not a coincidence if you'll recall that is the year when oil prices crashed. Since 2016, the sector has cleaned up its balance sheet and, buoyed by higher oil prices, leverage has improved in 2017 and 2018.  
+
+Leverage for the refining sub-sector, however, has been been flat from 2015-17, and increased in 2018 - as refining companies increased capital expenditure in anticipation of IMO 2020.  
+
+```{r Leverage (Clean)}
+Metrics %>%
+  filter(bloomberg.composite.rating %in% Rating) %>%
+  mutate(bucket = if_else(
+    bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher")) %>%
+  ggplot(aes(x = period, y = leverage, fill = bucket)) +
+  geom_boxplot(size = 0.6) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  facet_wrap(. ~ bclass.level.4.classification.name) +
+  ggtitle("Leverage", "Deleveraging has likely bottomed but unlikely to materially increase") +
+  theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1)) +
+  ylab("Debt/EBITDA (x)") +
+  ylim(0, 9)
+
+```
+
+> Diving Deeper Into The Data
+
+Boxplots are notorious for concealing the number of data points, and R (specifically, ggplot2 package) conveniently allows the user to display both the boxplot as well as the underlying data points. The downside, however, is additional clutter and will be aethestically less pleasing.  
+
+I also felt it would be helpful to label outliers and I sought to do this mathematically by using `quantile()`. In this case, **highly leveraged companies that fall in the 90th percentile of the bond universe would have  tickers displayed**.  
+
+N.B. There's a line of code that has been hashtagged out - it aims to label data points at 10% percentile or above.  
+
+* In the case of leverage, an analyst would be concerned about issuers with higher leverage (higher risk).  
+* However, if you had a cash flow metrics (as we'd see later on), we'd be concerned with lower cashflows (higher risk).  
+
+Hashtagging it meant I could switch the ggplots conveniently simply by removing/adding one hashtag.  
+
+With the number of data points now revealed and filtered tickers, some further insight has been revealed:  
+
+* BPLN has been the highest leveraged integrated oil major for the last 5 years. Why is that so and is it priced accordingly?
+* STOAU has done a beautiful job deleveraging - from being a huge outlier in 2017 to being in line with peers in 1H19.
+* With only data from three refiners, box plots in the Refining sector might not be fully reflective of the entire Refining sector.
+
+```{r Leverage (Details)}
+Metrics %>%
+  filter(bloomberg.composite.rating %in% Rating) %>%
+  mutate(bucket = if_else(
+    bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher")) %>%
+  ggplot(aes(x = period, y = leverage, fill = bucket)) +
+  geom_boxplot(size = 0.6, outlier.shape = NA) +
+  geom_jitter(aes(colour = factor(region)), size = 1.5, width = 0.1, pch = 2, stroke = 1.25) +
+  geom_text_repel(data = . %>%
+                    group_by(bclass.level.4.classification.name, period) %>%
+                    #mutate(percentile = leverage <= quantile(leverage, 0.1, na.rm = TRUE)) %>%
+                    mutate(percentile = leverage >= quantile(leverage, 0.9, na.rm = TRUE)) %>%
+                    filter(percentile == 1),
+                  aes(label = ticker), box.padding = 1, size = 4) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  facet_wrap(. ~ bclass.level.4.classification.name) +
+  ggtitle("Leverage", "Deleveraging has likely bottomed but unlikely to materially increase") +
+  theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1)) +
+  ylab("Debt/EBITDA (x)") +
+  ylim(0, 9)
+```
+
+> CapEx/Sales
+
+The Oil & Gas sector is capital intensive by nature and, historically, peak capex tends to coincide with a nasty market correction. I track CapEx/Sales as a comparative metric across all issuers regardless of size.  
+
+As a fixed income analyst, I take heart that CapEx/Sales has improved since 2016 and has stablized despite significantly higher oil prices. This has largely been driven by equity investors demanding ROI instead of growth-at-all-costs. The exception, once again, is the Refining sector where we see CapEx/Sales ticking up a little ahead of IMO 2020.  
+
+While lower CapEx usually translates into higher free cash flow, one also has to factor shareholder returns (share buybacks and dividends).
+
+```{r Capex/Sales (Clean)}
+Metrics %>%
+  filter(bloomberg.composite.rating %in% Rating) %>%
+  mutate(bucket = if_else(
+    bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher")) %>%
+  ggplot(aes(x = period, y = capex.to.sales, fill = bucket)) +
+  geom_boxplot(size = 0.6) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  facet_wrap(. ~ bclass.level.4.classification.name) +
+  ggtitle("CapEx/Sales", "Appetite for long-cycle greenfield projects are very low") +
+  theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1)) +
+  ylab("CapEx/Sales (%)") +
+  ylim(0, 80)
+```
+
+And the same chart, but this time with outlier labels:
+
+```{r Capex/Sales (Details)}
+Metrics %>%
+  filter(bloomberg.composite.rating %in% Rating) %>%
+  mutate(bucket = if_else(
+    bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher")) %>%
+  ggplot(aes(x = period, y = capex.to.sales, fill = bucket)) +
+  geom_boxplot(size = 0.6, outlier.shape = NA) +
+  geom_jitter(aes(colour = factor(region)), size = 1.5, width = 0.1, pch = 2, stroke = 1.25) +
+  geom_text_repel(data = . %>%
+                    group_by(bclass.level.4.classification.name, period) %>%
+                    #mutate(percentile = capex.to.sales <= quantile(capex.to.sales, 0.1, na.rm = TRUE)) %>%
+                    mutate(percentile = capex.to.sales >= quantile(capex.to.sales, 0.9, na.rm = TRUE)) %>%
+                    filter(percentile == 1),
+                  aes(label = ticker), box.padding = 1, size = 4) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  facet_wrap(. ~ bclass.level.4.classification.name) +
+  ggtitle("CapEx/Sales", "Appetite for long-cycle greenfield projects are very low") +
+  theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1)) +
+  ylab("CapEx/Sales (%)") +
+  ylim(0, 80)
+```
+
+Some initial thoughts and observations:  
+
+* Dispersion between median Capex/Sales of A- bucket and BBB bucket has shrunk - reflecting muted capex appetite
+* PETMK consistently has higher Capex/Sales compared to peers. What has been its ROI for capex been?
+
+
+> RCF/Net Debt
+
+Defined as (FCF - Dividends)/(Total Debt - Cash), this is an indicator of how healthy cash flows are relative to net debt levels, and is generally comparable to all companies. Midstream is the exception as these companies are structured as MLPs which have a policy to pay out excess cash after capex. As such, RCF/Net Debt is not an appropriate credit metric for this sub-sector.  
+
+RCF/Net Debt once again reinforces the view that balance sheets are healthy for the O&G sector. 
+
+```{r RCF/Net Debt (Clean)}
+Metrics %>%
+  filter(bloomberg.composite.rating %in% Rating) %>%
+  mutate(bucket = if_else(
+    bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher")) %>%
+  ggplot(aes(x = period, y = rcf.net.debt*100, fill = bucket)) +
+  geom_boxplot(size = 0.6) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  facet_wrap(. ~ bclass.level.4.classification.name) +
+  ggtitle("RCF/Net Debt", "Balance sheets have recovered and are stronger pre 2014-16 oil crisis") +
+  theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1)) +
+  ylab("RCF/Net Debt (%)") +
+  ylim(0, 100)
+```
+
+
+```{r RCF/Net Debt (Details)}
+Metrics %>%
+  filter(bloomberg.composite.rating %in% Rating) %>%
+  mutate(bucket = if_else(
+    bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher")) %>%
+  ggplot(aes(x = period, y = rcf.net.debt*100, fill = bucket)) +
+  geom_boxplot(size = 0.6, outlier.shape = NA) +
+  geom_jitter(aes(colour = factor(region)), size = 1.5, width = 0.1, pch = 2, stroke = 1.25) +
+  geom_text_repel(data = . %>%
+                    group_by(bclass.level.4.classification.name, period) %>%
+                    #mutate(percentile = rcf.net.debt <= quantile(rcf.net.debt, 0.1, na.rm = TRUE)) %>%
+                    mutate(percentile = rcf.net.debt >= quantile(rcf.net.debt, 0.9, na.rm = TRUE)) %>%
+                    filter(percentile == 1),
+                  aes(label = ticker), box.padding = 1, size = 4) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  facet_wrap(. ~ bclass.level.4.classification.name) +
+  ggtitle("RCF/Net Debt", "Balance sheets have recovered and are stronger pre 2014-16 oil crisis") +
+  theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1)) +
+  ylab("RCF/Net Debt (%)") +
+  ylim(0, 100)
+```
+
+# Data Visualization: Spread Movements and Relative Value
+
+Credit spreads can be defined as the difference in yield between a corporate bond over a comparable risk-free bond e.g. US Treasury bond. 
+
+* If credit spreads **widen**, one way to interpret this could be that the corporate's credit fundamentals are deteriorating. As a consequence of this deterioration, bond investors would need additional compensation via a higher yield - hence the widening.
+* Ergo, if credit spreads **tighten**, that can be viewed as an improvement in credit fundamentals.
+
+The way to view the following charts would be to gauge a bond's spread relative to zero on the y-axis. If the spread is below zero, that reflects tightening, and vice versa.
+
+> Credit Spreads Over a 1 Year Period (Nov 2018-19)
+
+* For both credit rating buckets, short-mid maturity bonds (< 7 years) generally saw credit spreads tightened, regardless of sub-sector. I'd attribute this to the sector's solid credit fundamentals that have been maintained.
+* Stand-out would be BPLN and OXY - the later which engaged in a credit-negative debt-funded M&A that saw its leverage increase to over 3x from below 1x. OXY was slapped with a three notch credit rating downgrade.
+
+```{r Spread Movements 1yr}
+Energy %>%
+  filter(maturity <= 20) %>% 
+  mutate(bucket = if_else(
+    bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher"),
+    label = paste(ticker, coupon, year, sep = " "),
+    curve =  cut(maturity, breaks = seq(0, 20, 5))) %>%
+  ggplot(aes(maturity, `1y.chg`)) +
+  geom_point(
+    aes(shape = bclass.level.4.classification.name, color = bclass.level.4.classification.name),
+    size = 2) +
+  geom_text_repel(data = . %>%
+                    group_by(bucket, curve) %>%
+                    mutate(percentile = `1y.chg` <= quantile(`1y.chg`, 0.025, na.rm = TRUE) |
+                             `1y.chg` >= quantile(`1y.chg`, 0.975, na.rm = TRUE)) %>%
+                    filter(percentile == 1),
+                  aes(label = label), box.padding = 0.5, size = 4) +
+  facet_wrap(. ~ bucket) +
+  xlab("Years to Maturity") +
+  ylab("Spread") +
+  ylim(-100, 100) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  ggtitle("Spread Movements (Nov 2018 - Nov 2019)", "Bonds Highlighted Have Experienced The Most Widening/Tightening") +
+  theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1))
+
+```
+
+> Credit Spreads YTD Paints A Different Picture
+
+* You'll be hard pressed to find a bond that *didn't* make money. This is mainly attributable to oil prices crashing in late 2018, and subsequently rallying in Jan 2019.
+* Given that the longer-end of the curve (> 15 years) hasn't rallied as much in both time frames, the market could be pricing in some uncertainty with regards to how the O&G sector would fare in an environment where climate change is greatly scrutinized.
+* In my opinion, climate change scrutiny is expected to intensify, shaping capex appetite and financing conditions for the sector.
+
+```{r Spread Movements YTD}
+Energy %>%
+  filter(maturity <= 20) %>% 
+  mutate(bucket = if_else(
+    bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher"),
+    label = paste(ticker, coupon, year, sep = " "),
+    curve =  cut(maturity, breaks = seq(0, 20, 4))) %>%
+  ggplot(aes(maturity, ytd.chg)) +
+  geom_point(
+    aes(shape = bclass.level.4.classification.name, color = bclass.level.4.classification.name),
+    size = 2) +
+  geom_text_repel(data = . %>%
+                    group_by(bucket, curve) %>%
+                    mutate(percentile = ytd.chg <= quantile(ytd.chg, 0.005, na.rm = TRUE) |
+                             ytd.chg >= quantile(ytd.chg, 0.995, na.rm = TRUE)) %>%
+                    filter(percentile == 1),
+                  aes(label = label), box.padding = 0.5, size = 4) +
+  facet_wrap(. ~ bucket) +
+  xlab("Years to Maturity") +
+  ylab("Spread") +
+  ylim(-150, 100) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  ggtitle("Spread Movements (2019 YTD)", "Bonds Highlighted Have Experienced The Most Widening/Tightening") +
+  theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1))
+
+```
+
+> Relative Value Screening
+
+My methodology here was to divide the 20-year curve into 10 parts consisting of 2 years each, and subsequently attempted to label outliers within each 2 year segment.  
+
+* BPLN once again screens cheap - rightfully so, in my opinion. Among the oil majors, BPLN's gearing improvements and debt reduction has been the slowest; but similar to peers, it has deleveraged through non-core asset disposals.
+* ETP screens cheap too: Current leverage is slightly higher than BBB- limit, with further leverage dependent on EBITDA growth rather than debt reduction. It faces some execution risk - some pipeline projects are encountering resistance from local communities.
+
+```{r Relative Value chart}
+Energy %>%
+  filter(maturity <= 20) %>% 
+  mutate(bucket = if_else(
+      bloomberg.composite.rating %in% c("BBB+", "BBB", "BBB-"), "BBB+ to BBB-", "A- & Higher"),
+    label = paste(ticker, coupon, year, sep = " "),
+    curve =  cut(maturity, breaks = seq(0, 20, 2))) %>%
+  ggplot(aes(maturity, current)) +
+  geom_point(
+    aes(shape = bclass.level.4.classification.name, color = bclass.level.4.classification.name),
+    size = 2) +
+  geom_smooth(method = "lm", formula = y ~ log(x), se = FALSE, colour = "Black") +
+  geom_text_repel(data = . %>%
+      group_by(bucket, curve) %>%
+      #mutate(percentile = current <= quantile(current, 0.01, na.rm = TRUE)) %>%
+      mutate(percentile = current >= quantile(current, 0.99, na.rm = TRUE)) %>%
+      filter(percentile == 1),
+    aes(label = label), box.padding = 0.5, size = 4) +
+  facet_wrap(. ~ bucket) +
+  xlab("Years to Maturity") +
+  ylab("Spread") +
+  ylim(0, 350) +
+  scale_color_manual(values = c("#23576E", "#099FDB", "#29B00E", "#208F84", "#F55840", "#924F3E")) +
+  #ggtitle("Relative Value (As Of 2nd Dec)", "XOM, RDSA, CNQCN, ENBCN Trades Tight") +
+  ggtitle("Relative Value (As Of 2nd Dec)", "BPLN, ETP Trades Wide") +
+    theme_ipsum() +
+  theme(plot.title = element_text(face = "bold", size = 30), plot.subtitle = element_text(size = 20),
+        strip.background = element_blank(), strip.text = element_text(face = "bold", size = 20),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.box = "horizontal", legend.text = element_text(size = 20)) +
+  guides(col = guide_legend(nrow = 1))
+```
+
+The beauty of doing this in R is the transparency of the method, as well as the customization; a portfolio manager could simply slice the curve to whichever portion they deem fit.  
+
+> Conclusion
+
+So if you made it to the end, thank you! This was my first RMarkdown document and my first blog post, and I certainly learnt much on how to do things and how *not* to do things.  
+
+I can see how data sets from Bloomberg's proprietary terminals can be difficult to obtain, so I'll aim to use more accessible datasets in future blog posts to improve replicability. Both Part I and Part II are available in RMD format on my [github](https://github.com/DesmondChoy/glaciers/tree/master/content/post).
+
+

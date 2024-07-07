@@ -1,0 +1,1809 @@
+---
+title: Grouping Primary Schools With Clustering
+author: Desmond Choy
+date: '2021-07-06'
+tags:
+  - EDA
+  - machine learning
+  - r
+  - visualization
+slug: index.en-us
+summary: Using public data as well as slightly unconventional (but widely quoted) data points such as a schools affiliation and popularity, can clustering offer an alternative comparison method when selecting your childs primary school?  
+readingtime: '15'
+coverImage: https://www.tnp.sg/sites/default/files/styles/rl780/public/articles/2017/07/17/cs-generic-primaryschoolkids02.jpg?itok=5kWkHCme
+thumbnailImage: https://images.unsplash.com/photo-1565291115725-d55f111538f3?ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&ixlib=rb-1.2.1&auto=format&fit=crop&w=331&q=80
+thumbnailImagePosition: left
+coverCaption: Photo by KUA CHEE SIONG (ST)
+output:
+  blogdown::html_page:
+    toc: yes
+---
+
+<script src="/rmarkdown-libs/header-attrs/header-attrs.js"></script>
+<script src="/rmarkdown-libs/jquery/jquery.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link href="/rmarkdown-libs/bootstrap/css/bootstrap.min.css" rel="stylesheet" />
+<script src="/rmarkdown-libs/bootstrap/js/bootstrap.min.js"></script>
+<link href="/rmarkdown-libs/crosstalk/css/crosstalk.css" rel="stylesheet" />
+<script src="/rmarkdown-libs/crosstalk/js/crosstalk.min.js"></script>
+<link href="/rmarkdown-libs/selectize/css/selectize.bootstrap3.css" rel="stylesheet" />
+<script src="/rmarkdown-libs/selectize/js/selectize.min.js"></script>
+<script src="/rmarkdown-libs/core-js/shim.min.js"></script>
+<script src="/rmarkdown-libs/react/react.min.js"></script>
+<script src="/rmarkdown-libs/react/react-dom.min.js"></script>
+<script src="/rmarkdown-libs/reactwidget/react-tools.js"></script>
+<script src="/rmarkdown-libs/htmlwidgets/htmlwidgets.js"></script>
+<script src="/rmarkdown-libs/reactable-binding/reactable.js"></script>
+
+<div id="TOC">
+<ul>
+<li><a href="#choosing-a-primary-school">Choosing a primary school</a></li>
+<li><a href="#libraries">Libraries</a></li>
+<li><a href="#importing-data">Importing data</a></li>
+<li><a href="#identifying-primary-schools">Identifying primary schools</a></li>
+<li><a href="#key-considerations">Key considerations</a>
+<ul>
+<li><a href="#affiliations">Affiliations</a></li>
+<li><a href="#popularity">Popularity</a></li>
+<li><a href="#accessability-buses">Accessability: Buses</a>
+<ul>
+<li><a href="#visualization">Visualization</a></li>
+</ul></li>
+<li><a href="#accessability-mrtlrt">Accessability: MRT/LRT</a>
+<ul>
+<li><a href="#visualization-1">Visualization</a></li>
+</ul></li>
+<li><a href="#final-features">Final features</a></li>
+</ul></li>
+<li><a href="#clustering">Clustering</a>
+<ul>
+<li><a href="#pre-processing">Pre-processing</a></li>
+<li><a href="#how-many-clusters-are-appropriate">How many clusters are appropriate?</a></li>
+<li><a href="#cluster-analysis">Cluster analysis</a></li>
+</ul></li>
+<li><a href="#explore-clusters-via-an-interactive-table">Explore clusters via an interactive table</a></li>
+<li><a href="#conclusion">Conclusion</a></li>
+</ul>
+</div>
+
+<p>Note: Should you wish to skip reading the commentary, data wrangling and clustering process - and jump straight to the table containing schools and clusters, click the <strong>Explore clusters via an interactive table</strong> link above.</p>
+<div id="choosing-a-primary-school" class="section level1">
+<h1>Choosing a primary school</h1>
+<p>In Singapore, the start of primary school marks the official commencement of a child’s formal education, and what follows is typically a multi-year journey that continues through secondary school to tertiary education.</p>
+<p>Like many of life’s important decisions, this isn’t a straightforward choice for most parents and planning often starts years ahead of the child’s eligible age (6 years old). With over 180 primary schools in Singapore and a registration process that takes place over <a href="https://www.moe.gov.sg/primary/p1-registration/registration-phases-key-dates">multiple priority phase</a>, I can empathize why parents could still be <a href="https://www.asiaone.com/singapore/confusing-p1-registration-gives-advantage-privileged-children-yale-nus-study">left confused</a> despite doing their homework (pun intended).</p>
+<p>The Ministry of Education has provided a bevy of <a href="https://www.moe.gov.sg/primary/p1-registration/how-to-choose-a-school">online resources</a> regarding primary school selection, including a <a href="https://www.moe.gov.sg/schoolfinder?journey=Primary%20school">school finder</a>.</p>
+<p>In this blog post, I aim to explore if clustering methods can offer an alternative comparison method when choosing a primary school, using public data made available by the government as well as incorporating slightly unconventional (but widely quoted) data points such as a school’s affiliation and popularity.</p>
+<p>That being said, the final decision could very well be driven by factors not captured in public data e.g. if a sibling is already in the school, it makes sense to choose the same school.</p>
+</div>
+<div id="libraries" class="section level1">
+<h1>Libraries</h1>
+<pre class="r"><code>#data wrangling
+library(tidyverse) 
+library(tidytext)
+library(widyr)
+
+#clustering
+library(tidymodels)
+library(broom)
+
+#visualization
+library(igraph)
+library(ggraph)
+library(patchwork)
+library(waffle)
+library(hrbrthemes)
+library(ggthemes)
+
+#tables
+library(knitr)
+library(reactable)
+library(crosstalk)
+
+theme_set(theme_minimal())</code></pre>
+</div>
+<div id="importing-data" class="section level1">
+<h1>Importing data</h1>
+<p>Data used in this post for schools was <a href="https://data.gov.sg/dataset/school-directory-and-information">downloaded here</a> in June 2021.</p>
+<pre class="r"><code>schools &lt;- read_csv(&quot;https://raw.githubusercontent.com/DesmondChoy/DataSets/master/general-information-of-schools.csv&quot;) %&gt;% 
+  map_df(~str_to_title(.))
+
+subjects &lt;- read_csv(&quot;https://raw.githubusercontent.com/DesmondChoy/DataSets/master/subjects-offered.csv&quot;) %&gt;%
+  map_df(~str_to_title(.))
+
+affiliation &lt;- read_csv(&quot;https://raw.githubusercontent.com/DesmondChoy/DataSets/master/school_affiliation.csv&quot;)</code></pre>
+<p>I have excluded using CCA (co-curricular activities) data provided because thirteen schools have missing data.</p>
+</div>
+<div id="identifying-primary-schools" class="section level1">
+<h1>Identifying primary schools</h1>
+<p>Let’s first identify only primary schools from the data set.</p>
+<pre class="r"><code>schools %&gt;% 
+  count(mainlevel_code, sort = TRUE)</code></pre>
+<pre><code>## # A tibble: 5 x 2
+##   mainlevel_code            n
+##   &lt;chr&gt;                 &lt;int&gt;
+## 1 Primary                 183
+## 2 Secondary               138
+## 3 Mixed Levels             14
+## 4 Junior College           10
+## 5 Centralised Institute     1</code></pre>
+<p>Do <code>Mixed Levels</code> count as primary schools?</p>
+<pre class="r"><code>schools %&gt;% 
+  filter(mainlevel_code == &quot;Mixed Levels&quot;) %&gt;% 
+  select(school_name, mainlevel_code)</code></pre>
+<pre><code>## # A tibble: 14 x 2
+##    school_name                                mainlevel_code
+##    &lt;chr&gt;                                      &lt;chr&gt;         
+##  1 Anglo-Chinese School (Independent)         Mixed Levels  
+##  2 Catholic High School                       Mixed Levels  
+##  3 Chij St. Nicholas Girls&#39; School            Mixed Levels  
+##  4 Dunman High School                         Mixed Levels  
+##  5 Hwa Chong Institution                      Mixed Levels  
+##  6 Maris Stella High School                   Mixed Levels  
+##  7 National Junior College                    Mixed Levels  
+##  8 Nus High School Of Mathematics And Science Mixed Levels  
+##  9 Raffles Institution                        Mixed Levels  
+## 10 River Valley High School                   Mixed Levels  
+## 11 School Of The Arts, Singapore              Mixed Levels  
+## 12 Singapore Sports School                    Mixed Levels  
+## 13 St. Joseph&#39;s Institution                   Mixed Levels  
+## 14 Temasek Junior College                     Mixed Levels</code></pre>
+<p>I did some preliminary investigation (read: googling) into each school and decided to include only Chij St. Nicholas Girls’ School, Catholic High School and Maris Stella High School.</p>
+<pre class="r"><code>mixed_levels &lt;- schools %&gt;% 
+  filter(mainlevel_code == &quot;Mixed Levels&quot;,
+         #filter out mixed levels school with no primary levels
+         school_name %in% c(&quot;Chij St. Nicholas Girls&#39; School&quot;, &quot;Catholic High School&quot;, &quot;Maris Stella High School&quot;)) %&gt;% 
+  pull(school_name)
+
+mixed_levels</code></pre>
+<pre><code>## [1] &quot;Catholic High School&quot;            &quot;Chij St. Nicholas Girls&#39; School&quot;
+## [3] &quot;Maris Stella High School&quot;</code></pre>
+<p>With that, we have <code>pri_sch</code> data frame consisting of only primary schools.</p>
+<pre class="r"><code>schools &lt;- schools %&gt;% 
+  mutate(mainlevel_code = replace(mainlevel_code,
+                                  school_name %in% mixed_levels,
+                                  &quot;Primary&quot;))
+pri_sch &lt;- schools %&gt;% 
+  filter(mainlevel_code == &quot;Primary&quot;)
+
+pri_sch %&gt;% glimpse()</code></pre>
+<pre><code>## Rows: 186
+## Columns: 31
+## $ school_name        &lt;chr&gt; &quot;Admiralty Primary School&quot;, &quot;Ahmad Ibrahim Primary ~
+## $ url_address        &lt;chr&gt; &quot;Https://Admiraltypri.moe.edu.sg/&quot;, &quot;Http://Www.ahm~
+## $ address            &lt;chr&gt; &quot;11   Woodlands Circle&quot;, &quot;10   Yishun Street 11&quot;, &quot;~
+## $ postal_code        &lt;chr&gt; &quot;738907&quot;, &quot;768643&quot;, &quot;579646&quot;, &quot;159016&quot;, &quot;544969&quot;, &quot;~
+## $ telephone_no       &lt;chr&gt; &quot;63620598&quot;, &quot;67592906&quot;, &quot;64547672&quot;, &quot;62485400&quot;, &quot;68~
+## $ telephone_no_2     &lt;chr&gt; &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;67337912~
+## $ fax_no             &lt;chr&gt; &quot;63627512&quot;, &quot;67592927&quot;, &quot;64532726&quot;, &quot;62485409&quot;, &quot;63~
+## $ fax_no_2           &lt;chr&gt; &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na&quot;, &quot;Na~
+## $ email_address      &lt;chr&gt; &quot;Admiralty_ps@Moe.edu.sg&quot;, &quot;Aips@Moe.edu.sg&quot;, &quot;Aito~
+## $ mrt_desc           &lt;chr&gt; &quot;Admiralty Station&quot;, &quot;Yishun&quot;, &quot;Bishan Mrt&quot;, &quot;Redhi~
+## $ bus_desc           &lt;chr&gt; &quot;Tibs 965, 964, 913&quot;, &quot;Yishun Ring Road - 812 (Whit~
+## $ principal_name     &lt;chr&gt; &quot;Mr Pek Wee Haur&quot;, &quot;Miss Ong Lee Choo&quot;, &quot;Mdm Goh Li~
+## $ first_vp_name      &lt;chr&gt; &quot;Mdm Chua Mui Ling&quot;, &quot;Madam Sulasni Binte Abdul Rah~
+## $ second_vp_name     &lt;chr&gt; &quot;Mdm Nur Sabariah Bte Mohd Ibrahim&quot;, &quot;Null&quot;, &quot;Mr Ya~
+## $ third_vp_name      &lt;chr&gt; &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Nu~
+## $ fourth_vp_name     &lt;chr&gt; &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Nu~
+## $ fifth_vp_name      &lt;chr&gt; &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Nu~
+## $ sixth_vp_name      &lt;chr&gt; &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Null&quot;, &quot;Nu~
+## $ dgp_code           &lt;chr&gt; &quot;Woodlands&quot;, &quot;Yishun&quot;, &quot;Bishan&quot;, &quot;Bukit Merah&quot;, &quot;Se~
+## $ zone_code          &lt;chr&gt; &quot;North&quot;, &quot;North&quot;, &quot;South&quot;, &quot;South&quot;, &quot;North&quot;, &quot;North~
+## $ type_code          &lt;chr&gt; &quot;Government School&quot;, &quot;Government School&quot;, &quot;Governme~
+## $ nature_code        &lt;chr&gt; &quot;Co-Ed School&quot;, &quot;Co-Ed School&quot;, &quot;Co-Ed School&quot;, &quot;Co~
+## $ session_code       &lt;chr&gt; &quot;Full Day&quot;, &quot;Single Session&quot;, &quot;Single Session&quot;, &quot;Si~
+## $ mainlevel_code     &lt;chr&gt; &quot;Primary&quot;, &quot;Primary&quot;, &quot;Primary&quot;, &quot;Primary&quot;, &quot;Primar~
+## $ sap_ind            &lt;chr&gt; &quot;No&quot;, &quot;No&quot;, &quot;Yes&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;N~
+## $ autonomous_ind     &lt;chr&gt; &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No~
+## $ gifted_ind         &lt;chr&gt; &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;Ye~
+## $ ip_ind             &lt;chr&gt; &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No~
+## $ mothertongue1_code &lt;chr&gt; &quot;Chinese&quot;, &quot;Chinese&quot;, &quot;Chinese&quot;, &quot;Chinese&quot;, &quot;Chines~
+## $ mothertongue2_code &lt;chr&gt; &quot;Malay&quot;, &quot;Malay&quot;, &quot;Na&quot;, &quot;Malay&quot;, &quot;Malay&quot;, &quot;Malay&quot;, ~
+## $ mothertongue3_code &lt;chr&gt; &quot;Tamil&quot;, &quot;Tamil&quot;, &quot;Na&quot;, &quot;Tamil&quot;, &quot;Tamil&quot;, &quot;Tamil&quot;, ~</code></pre>
+</div>
+<div id="key-considerations" class="section level1">
+<h1>Key considerations</h1>
+<p>For clustering, I will narrow down the <code>pri_sch</code> data to a couple of key considerations (in my humble opinion) that will swing the decision:</p>
+<ul>
+<li>Location. Proximity to a family’s current residenceor where they might be residing in future. Here we’ll be using <code>zone_code</code> (North/South/East/West) and <code>dgp_code</code> - consisting of all 27 urban planning and census <a href="https://en.wikipedia.org/wiki/Planning_Areas_of_Singapore">divisions of Singapore</a>. This is important because families that stay within 1km/2km of a school enjoy priority.<br />
+</li>
+<li><code>nature_code</code> representing the co-ed status of a school - whether a school is mixed or a strictly Boys’/Girls’ school.</li>
+<li><code>gifted_ind</code> indicates if a school offers <a href="https://en.wikipedia.org/wiki/Gifted_Education_Programme_(Singapore)">Gifted Education Programme (GEP)</a>. The GEP is designed to identify the top 1% students based on a series of tests. As of 2020, 9 schools offer GEP.</li>
+<li><code>sap_ind</code> indicates if a school offers <a href="https://en.wikipedia.org/wiki/Special_Assistance_Plan">Special Assistance Plan (SAP)</a>, which is a syllabus more focused on a student’s mother tongue (typically Mandarin). Here is an <a href="http://mylilbookworm.blogspot.com/2015/04/to-sap-or-not-to-sap-dilemma-of.html">interesting commentary</a> I found on SAP schools.</li>
+</ul>
+<p>On a related note, I intentionally excluded data points related to accessibility i.e. public transport. I could be wrong on this, but I believe a great deal of parents would use the school’s bus shuttle services to transport the kids to and fro from school. Accessibility is a point of consideration but would come into play more strongly when a child is old and independent enough to take public transport.</p>
+<pre class="r"><code>features &lt;- pri_sch %&gt;% 
+  select(school_name, zone_code, dgp_code, nature_code, gifted_ind, sap_ind)
+
+features</code></pre>
+<pre><code>## # A tibble: 186 x 6
+##    school_name               zone_code dgp_code   nature_code gifted_ind sap_ind
+##    &lt;chr&gt;                     &lt;chr&gt;     &lt;chr&gt;      &lt;chr&gt;       &lt;chr&gt;      &lt;chr&gt;  
+##  1 Admiralty Primary School  North     Woodlands  Co-Ed Scho~ No         No     
+##  2 Ahmad Ibrahim Primary Sc~ North     Yishun     Co-Ed Scho~ No         No     
+##  3 Ai Tong School            South     Bishan     Co-Ed Scho~ No         Yes    
+##  4 Alexandra Primary School  South     Bukit Mer~ Co-Ed Scho~ No         No     
+##  5 Anchor Green Primary Sch~ North     Seng Kang  Co-Ed Scho~ No         No     
+##  6 Anderson Primary School   North     Ang Mo Kio Co-Ed Scho~ No         No     
+##  7 Ang Mo Kio Primary School South     Ang Mo Kio Co-Ed Scho~ No         No     
+##  8 Anglo-Chinese School (Ju~ South     Central    Boys&#39; Scho~ No         No     
+##  9 Anglo-Chinese School (Pr~ South     Novena     Boys&#39; Scho~ Yes        No     
+## 10 Angsana Primary School    East      Tampines   Co-Ed Scho~ No         No     
+## # ... with 176 more rows</code></pre>
+<div id="affiliations" class="section level2">
+<h2>Affiliations</h2>
+<p>Whether a primary school has affiliations (or not) with a secondary school is usually an important factor when selecting a primary school. Secondary schools offer students from affiliated primary schools students priority admission as they focus on fostering strong school spirits and traditions. This essentially makes it easier for affiliated students to enter the related secondary school.</p>
+<p>This is the list of primary schools with affiliations, taken from <a href="https://www.salary.sg/2020/best-primary-schools-2020-by-popularity/">here</a>:</p>
+<pre class="r"><code>affiliation %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="38%" />
+<col width="61%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">affiliation</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Anglo-Chinese School (Junior)</td>
+<td align="left">Anglo-Chinese School (Barker Road), Anglo-Chinese School (Independent)</td>
+</tr>
+<tr class="even">
+<td align="left">Anglo-Chinese School (Primary)</td>
+<td align="left">Anglo-Chinese School (Barker Road), Anglo-Chinese School (Independent)</td>
+</tr>
+<tr class="odd">
+<td align="left">Catholic High School (Primary)</td>
+<td align="left">Catholic High School</td>
+</tr>
+<tr class="even">
+<td align="left">De La Salle School (co-ed)</td>
+<td align="left">St. Joseph’s Institution, St. Patrick’s School</td>
+</tr>
+<tr class="odd">
+<td align="left">Maris Stella High School</td>
+<td align="left">Maris Stella High School</td>
+</tr>
+<tr class="even">
+<td align="left">Montfort Junior School</td>
+<td align="left">Montfort Secondary School</td>
+</tr>
+<tr class="odd">
+<td align="left">St. Andrew’s Junior School</td>
+<td align="left">St. Andrew’s Secondary School</td>
+</tr>
+<tr class="even">
+<td align="left">St. Anthony’s Primary School (co-ed)</td>
+<td align="left">St. Joseph’s Institution, St. Patrick’s School</td>
+</tr>
+<tr class="odd">
+<td align="left">St. Gabriel’s Primary School</td>
+<td align="left">St. Gabriel’s Secondary School</td>
+</tr>
+<tr class="even">
+<td align="left">St. Joseph’s Institution Junior</td>
+<td align="left">St. Joseph’s Institution, St. Patrick’s School</td>
+</tr>
+<tr class="odd">
+<td align="left">St. Stephen’s School</td>
+<td align="left">St. Joseph’s Institution, St. Patrick’s School</td>
+</tr>
+<tr class="even">
+<td align="left">Canossa Convent Primary School</td>
+<td align="left">St. Anthony’s Canossian Secondary School</td>
+</tr>
+<tr class="odd">
+<td align="left">CHIJ (Katong) Primary</td>
+<td align="left">CHIJ Katong Convent</td>
+</tr>
+<tr class="even">
+<td align="left">CHIJ Primary (Toa Payoh)</td>
+<td align="left">CHIJ Secondary (Toa Payoh)</td>
+</tr>
+<tr class="odd">
+<td align="left">CHIJ Our Lady of the Nativity</td>
+<td align="left">CHIJ St. Joseph’s Convent</td>
+</tr>
+<tr class="even">
+<td align="left">CHIJ Our Lady of Good Counsel</td>
+<td align="left">CHIJ St. Joseph’s Convent</td>
+</tr>
+<tr class="odd">
+<td align="left">CHIJ St. Nicholas Girls’ School (Primary)</td>
+<td align="left">CHIJ St. Nicholas Girls’ School</td>
+</tr>
+<tr class="even">
+<td align="left">CHIJ (Kellock)</td>
+<td align="left">CHIJ St. Theresa’s Convent</td>
+</tr>
+<tr class="odd">
+<td align="left">CHIJ Our Lady Queen of Peace</td>
+<td align="left">CHIJ St. Theresa’s Convent</td>
+</tr>
+<tr class="even">
+<td align="left">Methodist Girls’ School (Primary)</td>
+<td align="left">Methodist Girls’ School (Secondary)</td>
+</tr>
+<tr class="odd">
+<td align="left">Nanyang Primary School (co-ed)</td>
+<td align="left">Nanyang Girls’ High School</td>
+</tr>
+<tr class="even">
+<td align="left">Paya Lebar Methodist Girls’ School (Primary)</td>
+<td align="left">Paya Lebar Methodist Girls’ School (Secondary)</td>
+</tr>
+<tr class="odd">
+<td align="left">Singapore Chinese Girls’ Primary School</td>
+<td align="left">Singapore Chinese Girls’ School</td>
+</tr>
+<tr class="even">
+<td align="left">St. Anthony’s Canossian Primary School</td>
+<td align="left">St. Anthony’s Canossian Secondary School</td>
+</tr>
+<tr class="odd">
+<td align="left">St. Margaret’s Primary School</td>
+<td align="left">St. Margaret’s Secondary School</td>
+</tr>
+<tr class="even">
+<td align="left">Fairfield Methodist School (Primary)</td>
+<td align="left">Fairfield Methodist School (Secondary)</td>
+</tr>
+<tr class="odd">
+<td align="left">Geylang Methodist School (Primary)</td>
+<td align="left">Geylang Methodist School (Secondary)</td>
+</tr>
+<tr class="even">
+<td align="left">Holy Innocents’ Primary School</td>
+<td align="left">Holy Innocent’s High School</td>
+</tr>
+<tr class="odd">
+<td align="left">Kuo Chuan Presbyterian Primary School</td>
+<td align="left">Kuo Chuan Presbyterian Secondary School</td>
+</tr>
+<tr class="even">
+<td align="left">Maha Bodhi School</td>
+<td align="left">Manjusri Secondary School</td>
+</tr>
+<tr class="odd">
+<td align="left">Mee Toh School</td>
+<td align="left">Manjusri Secondary School</td>
+</tr>
+<tr class="even">
+<td align="left">Ngee Ann Primary School</td>
+<td align="left">Ngee Ann Secondary School</td>
+</tr>
+<tr class="odd">
+<td align="left">St. Hilda’s Primary School</td>
+<td align="left">St. Hilda’s Secondary School</td>
+</tr>
+</tbody>
+</table>
+<pre class="r"><code>affiliation &lt;- affiliation %&gt;%
+  mutate(
+    school_name = case_when(
+      school_name == &quot;Canossa Convent Primary School&quot; ~ &quot;Canossa Catholic Primary School&quot;,
+      school_name == &quot;Catholic High School (Primary)&quot; ~ &quot;Catholic High School&quot;,
+      school_name == &quot;CHIJ St. Nicholas Girls&#39; School (Primary)&quot; ~ &quot;Chij St. Nicholas Girls&#39; School&quot;,
+      TRUE ~ school_name
+    ),
+    school_name = str_replace_all(school_name, &quot;CHIJ&quot;, &quot;Chij&quot;),
+    school_name = str_replace_all(school_name, &quot;of&quot;, &quot;Of&quot;),
+    school_name = str_replace_all(school_name, &quot;the&quot;, &quot;The&quot;),
+    school_name = str_remove_all(school_name, &quot;[:blank:]+\\(co-ed\\)&quot;)
+  ) %&gt;%
+  select(-affiliation)</code></pre>
+</div>
+<div id="popularity" class="section level2">
+<h2>Popularity</h2>
+<p>The popularity of a school can be quantified in several ways - one of which is the average subscription rate for Phase 2A2 and Phase 2B. (See <a href="https://www.moe.gov.sg/primary/p1-registration/registration-phases-key-dates">here</a> as a refresher on how phases work). There isn’t any public data available to draw correlations/conclusions between a primary school’s average examination performance and its popularity but, for better or for worse, popularity of schools is a metric monitored closely by certain parents.</p>
+<p>I’ve taken popularity data <a href="https://www.salary.sg/2020/best-primary-schools-2020-by-popularity/">compiled here</a>.</p>
+<pre class="r"><code>popularity &lt;- read_csv(&quot;https://raw.githubusercontent.com/DesmondChoy/DataSets/master/school_popularity.csv&quot;) %&gt;%
+  mutate(
+    school_name = case_when(
+      school_name == &quot;Singapore Chinese Girls&#39; School (Primary)&quot; ~ &quot;Singapore Chinese Girls&#39; Primary School&quot;,
+      school_name == &quot;Catholic High School (Primary Section)&quot; ~ &quot;Catholic High School&quot;,
+      school_name == &quot;CHIJ St. Nicholas Girls&#39; School (Primary Section)&quot; ~ &quot;Chij St. Nicholas Girls&#39; School&quot;,
+      school_name == &quot;Maris Stella High School (Primary Section)&quot; ~ &quot;Maris Stella High School&quot;,
+      TRUE ~ school_name
+    ),
+    school_name = str_replace_all(school_name, &quot;CHIJ&quot;, &quot;Chij&quot;),
+    school_name = str_replace_all(school_name, &quot;of&quot;, &quot;Of&quot;),
+    school_name = str_replace_all(school_name, &quot;the&quot;, &quot;The&quot;)
+  ) %&gt;%
+  select(-data) %&gt;% 
+  rename(&quot;popularity&quot; = &quot;sub_avg&quot;)</code></pre>
+<p>Instead of using their absolute rankings, I’ve decided to lump them into ten approximately equal groups after sorting them by their rankings.</p>
+<pre class="r"><code>pop_grouping &lt;- popularity %&gt;% 
+  arrange(desc(popularity)) %&gt;% 
+  mutate(pop_decile = ntile(popularity, n = 10)) %&gt;% 
+  select(-popularity)
+
+pop_grouping %&gt;% 
+  count(pop_decile)</code></pre>
+<pre><code>## # A tibble: 10 x 2
+##    pop_decile     n
+##         &lt;int&gt; &lt;int&gt;
+##  1          1    19
+##  2          2    19
+##  3          3    19
+##  4          4    19
+##  5          5    19
+##  6          6    19
+##  7          7    18
+##  8          8    18
+##  9          9    18
+## 10         10    18</code></pre>
+</div>
+<div id="accessability-buses" class="section level2">
+<h2>Accessability: Buses</h2>
+<p>To count the number of buses each school have access to, let’s take a look at the data. The <code>bus_desc</code> column is generally clean but I’ve highlighted some schools that have data which is rather messy e.g. Innova.</p>
+<pre class="r"><code>pri_sch %&gt;%
+  select(school_name, bus_desc) %&gt;%
+  head(n = 3) %&gt;% 
+  #highlighting some messy data
+  bind_rows(pri_sch %&gt;%
+              select(school_name, bus_desc) %&gt;%
+              filter(
+                str_detect(school_name, &quot;Compass|Innova|Northland|Sengkang|Xishan&quot;))) %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="15%" />
+<col width="84%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">bus_desc</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Admiralty Primary School</td>
+<td align="left">Tibs 965, 964, 913</td>
+</tr>
+<tr class="even">
+<td align="left">Ahmad Ibrahim Primary School</td>
+<td align="left">Yishun Ring Road - 812 (White Plate); Yishun Ave 2 - 169, 804, 965, 117, 883</td>
+</tr>
+<tr class="odd">
+<td align="left">Ai Tong School</td>
+<td align="left">410, 162, 52</td>
+</tr>
+<tr class="even">
+<td align="left">Compassvale Primary School</td>
+<td align="left">83 (Along Compassvale Street) 27, 89, 89e &amp; 965 (Along Compassvale Road).</td>
+</tr>
+<tr class="odd">
+<td align="left">Innova Primary School</td>
+<td align="left">900a (Weekdays Only - 7.00 Am To 8.30 Am &amp; 4.30 Pm To 6.30 Pm), 901</td>
+</tr>
+<tr class="even">
+<td align="left">Northland Primary School</td>
+<td align="left">812 (Next To Bus Service Number 171) At Yishun Interchange</td>
+</tr>
+<tr class="odd">
+<td align="left">Sengkang Green Primary School</td>
+<td align="left">Sengkang And Toa Payoh Interchange - No 163, Along Yio Chu Kang Road, - No 70, 86, 103 And 854.Punggol Temp Interchange To Bishan Interchange - Bus 50</td>
+</tr>
+<tr class="even">
+<td align="left">Xishan Primary School</td>
+<td align="left">Along Yishun Ave 2,Take Bus Service 117, 169, 804, 812, 965. Alight At Blk 220. Along Yishun Ring Road,Take Bus Service 1n, 800, 804, Nr1. Alight At Blk 227 Or 236.</td>
+</tr>
+</tbody>
+</table>
+<p>If I were to just pick out the numbers from the <code>bus_desc</code> column, thinking they were bus numbers, I would be correct for most columns. But you can see (above) that not all numbers represent bus numbers.</p>
+<p>I’ll use regular expressions (regex) to clean this up.</p>
+<pre class="r"><code>bus_desc_regex &lt;- pri_sch %&gt;%
+  mutate(
+    bus_desc = str_to_lower(bus_desc),
+    bus_desc_clean = str_remove_all(bus_desc, &quot;(ave|blk|st)[:blank:]?[:digit:]+.?[:blank:]?&quot;),
+    #extra cleaning for Innova
+    bus_desc_clean = str_remove_all(bus_desc_clean, &quot;[:digit:]+.?[:digit:]+[:blank:]?(am|pm|min)[:blank:]?&quot;))</code></pre>
+<p>The before/after results of cleaning:</p>
+<pre class="r"><code>bus_desc_regex %&gt;% 
+  filter(str_detect(school_name, &quot;Anderson|Springdale|Yangzheng|Hilda|Innova&quot;)) %&gt;% 
+  select(school_name, bus_desc, bus_desc_clean) %&gt;% 
+  distinct(school_name, .keep_all = TRUE) %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="8%" />
+<col width="48%" />
+<col width="43%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">bus_desc</th>
+<th align="left">bus_desc_clean</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Anderson Primary School</td>
+<td align="left">ang mo kio ave 9 - bus 76, 265, 268</td>
+<td align="left">ang mo kio - bus 76, 265, 268</td>
+</tr>
+<tr class="even">
+<td align="left">Innova Primary School</td>
+<td align="left">900a (weekdays only - 7.00 am to 8.30 am &amp; 4.30 pm to 6.30 pm), 901</td>
+<td align="left">900a (weekdays only - to &amp; to ), 901</td>
+</tr>
+<tr class="odd">
+<td align="left">Springdale Primary School</td>
+<td align="left">50, 85, 102, 372 nearest bus stop: in front of blk 326 car park *1-2 min walk from bus stop; enter by main gate along anchorvale link or rear gate</td>
+<td align="left">50, 85, 102, 372 nearest bus stop: in front of car park *walk from bus stop; enter by main gate along anchorvale link or rear gate</td>
+</tr>
+<tr class="even">
+<td align="left">St. Hilda’s Primary School</td>
+<td align="left">feeder bus service: 293 from tampines interchange (towards st 71)</td>
+<td align="left">feeder bus service: 293 from tampines interchange (towards</td>
+</tr>
+<tr class="odd">
+<td align="left">Yangzheng Primary School</td>
+<td align="left">58 &amp; 105 (outside the school, serangoon ave 3) 133 &amp; 135(serangoon ave 2)</td>
+<td align="left">58 &amp; 105 (outside the school, serangoon 133 &amp; 135(serangoon</td>
+</tr>
+</tbody>
+</table>
+<p>Comparing <code>bus_desc</code> to <code>bus_desc_clean</code>, the numbers after any incidence of “ave” (shorthand for avenue), “blk” (shorthand for block) or “st” (shorth and for street) are removed. I also did one extra round of cleaning for Innova, and we see that the numbers before “am” (ante meridiem) and “pm” (post meridiem) are now removed too.</p>
+<p>With that, numbers from <code>bus_desc_clean</code> column can be extracted and used as bus numbers associated with each primary school.</p>
+<pre class="r"><code>buses_clean &lt;- bus_desc_regex %&gt;% 
+  #extract digits  
+  mutate(buses = str_extract_all(bus_desc_clean, &quot;\\b[:digit:]+\\w*&quot;)) %&gt;% 
+  unnest(buses) %&gt;% 
+  group_by(school_name) %&gt;% 
+  distinct(buses, .keep_all = TRUE) %&gt;% 
+  ungroup()</code></pre>
+<pre class="r"><code>set.seed(2020)
+
+sample &lt;- buses_clean %&gt;%
+  filter(str_detect(bus_desc, &quot;[:lower:]&quot;)) %&gt;%
+  distinct(school_name) %&gt;%
+  slice_sample(n = 5) %&gt;%
+  pull(school_name)
+
+buses_clean %&gt;% 
+  filter(school_name %in% sample) %&gt;%
+  select(school_name, bus_desc, buses) %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="28%" />
+<col width="67%" />
+<col width="4%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">bus_desc</th>
+<th align="left">buses</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Chij Our Lady Of Good Counsel</td>
+<td align="left">317 feeder bus service from serangoon interchange. 135,136 from ang mo kio interchange.</td>
+<td align="left">317</td>
+</tr>
+<tr class="even">
+<td align="left">Chij Our Lady Of Good Counsel</td>
+<td align="left">317 feeder bus service from serangoon interchange. 135,136 from ang mo kio interchange.</td>
+<td align="left">135</td>
+</tr>
+<tr class="odd">
+<td align="left">Chij Our Lady Of Good Counsel</td>
+<td align="left">317 feeder bus service from serangoon interchange. 135,136 from ang mo kio interchange.</td>
+<td align="left">136</td>
+</tr>
+<tr class="even">
+<td align="left">Concord Primary School</td>
+<td align="left">bus 300 and 983</td>
+<td align="left">300</td>
+</tr>
+<tr class="odd">
+<td align="left">Concord Primary School</td>
+<td align="left">bus 300 and 983</td>
+<td align="left">983</td>
+</tr>
+<tr class="even">
+<td align="left">Fairfield Methodist School (Primary)</td>
+<td align="left">sbs bus 14,33,74,166 &amp; 196</td>
+<td align="left">14</td>
+</tr>
+<tr class="odd">
+<td align="left">Fairfield Methodist School (Primary)</td>
+<td align="left">sbs bus 14,33,74,166 &amp; 196</td>
+<td align="left">33</td>
+</tr>
+<tr class="even">
+<td align="left">Fairfield Methodist School (Primary)</td>
+<td align="left">sbs bus 14,33,74,166 &amp; 196</td>
+<td align="left">74</td>
+</tr>
+<tr class="odd">
+<td align="left">Fairfield Methodist School (Primary)</td>
+<td align="left">sbs bus 14,33,74,166 &amp; 196</td>
+<td align="left">166</td>
+</tr>
+<tr class="even">
+<td align="left">Fairfield Methodist School (Primary)</td>
+<td align="left">sbs bus 14,33,74,166 &amp; 196</td>
+<td align="left">196</td>
+</tr>
+<tr class="odd">
+<td align="left">Innova Primary School</td>
+<td align="left">900a (weekdays only - 7.00 am to 8.30 am &amp; 4.30 pm to 6.30 pm), 901</td>
+<td align="left">900a</td>
+</tr>
+<tr class="even">
+<td align="left">Innova Primary School</td>
+<td align="left">900a (weekdays only - 7.00 am to 8.30 am &amp; 4.30 pm to 6.30 pm), 901</td>
+<td align="left">901</td>
+</tr>
+<tr class="odd">
+<td align="left">South View Primary School</td>
+<td align="left">307 / south view lrt station</td>
+<td align="left">307</td>
+</tr>
+</tbody>
+</table>
+<p>That’s all the data cleaning, right? Nope! Most of the bus numbers were able to be extracted, but there are false positives like zeroes - thanks to data entry errors (there is no bus 000 in Singapore)</p>
+<pre class="r"><code>buses_clean %&gt;% 
+  select(school_name, bus_desc, buses) %&gt;% 
+  arrange(buses) %&gt;% 
+  head(n = 10) %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="14%" />
+<col width="82%" />
+<col width="2%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">bus_desc</th>
+<th align="left">buses</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Ang Mo Kio Primary School</td>
+<td align="left">76,132,165,166,169,200,000,000</td>
+<td align="left">000</td>
+</tr>
+<tr class="even">
+<td align="left">Jiemin Primary School</td>
+<td align="left">167,169,171,800,811,000,000,000,000,000,000</td>
+<td align="left">000</td>
+</tr>
+<tr class="odd">
+<td align="left">West View Primary School</td>
+<td align="left">170,171,176,178,180,000,000,000,000,000</td>
+<td align="left">000</td>
+</tr>
+<tr class="even">
+<td align="left">Chij (Katong) Primary</td>
+<td align="left">15, 55, 36, 16, 135, 197, 196, 31, 13, 76, 12, 10, 14, 32, 40</td>
+<td align="left">10</td>
+</tr>
+<tr class="odd">
+<td align="left">Junyuan Primary School</td>
+<td align="left">76281: 22, 46, 129 76061: 10, 15, 20, 21, 23, 27, 31, 34, 39, 65, 67, 168, 292 75051: 5, 8, 18, 28, 59, 118</td>
+<td align="left">10</td>
+</tr>
+<tr class="even">
+<td align="left">Tampines Primary School</td>
+<td align="left">8, 10, 17,18, 27, 31, 65, 292, 293, or any bus going into tampines interchange</td>
+<td align="left">10</td>
+</tr>
+<tr class="odd">
+<td align="left">Temasek Primary School</td>
+<td align="left">229, 10, 14, 13, 48, 43, 506</td>
+<td align="left">10</td>
+</tr>
+<tr class="even">
+<td align="left">Canossa Catholic Primary School</td>
+<td align="left">aljunied road (same side as ccps): 62, 64, 100 aljunied road (opposite ccps): 61, 62, 64, 66, 100, 135, 154, 155 merpati rd (after jln anggerek): 40, 61, 63, 65, 66, 135,</td>
+<td align="left">100</td>
+</tr>
+<tr class="odd">
+<td align="left">Cedar Primary School</td>
+<td align="left">8, 61, 64, 65, 66, 66a, 90, 90a, 100, 135, 151, 154, 155</td>
+<td align="left">100</td>
+</tr>
+<tr class="even">
+<td align="left">New Town Primary School</td>
+<td align="left">sbs numbers 32, 100, 105, 111, 145, 147, 195, 196, 198, 855</td>
+<td align="left">100</td>
+</tr>
+</tbody>
+</table>
+<p>There are also no buses with more than four alphanumeric characters (to my knowledge).</p>
+<pre class="r"><code>buses_clean %&gt;% 
+  rowwise() %&gt;% 
+  filter(nchar(buses) &gt; 4) %&gt;% 
+  select(school_name, bus_desc, buses) %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="16%" />
+<col width="78%" />
+<col width="4%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">bus_desc</th>
+<th align="left">buses</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Junyuan Primary School</td>
+<td align="left">76281: 22, 46, 129 76061: 10, 15, 20, 21, 23, 27, 31, 34, 39, 65, 67, 168, 292 75051: 5, 8, 18, 28, 59, 118</td>
+<td align="left">76281</td>
+</tr>
+<tr class="even">
+<td align="left">Junyuan Primary School</td>
+<td align="left">76281: 22, 46, 129 76061: 10, 15, 20, 21, 23, 27, 31, 34, 39, 65, 67, 168, 292 75051: 5, 8, 18, 28, 59, 118</td>
+<td align="left">76061</td>
+</tr>
+<tr class="odd">
+<td align="left">Junyuan Primary School</td>
+<td align="left">76281: 22, 46, 129 76061: 10, 15, 20, 21, 23, 27, 31, 34, 39, 65, 67, 168, 292 75051: 5, 8, 18, 28, 59, 118</td>
+<td align="left">75051</td>
+</tr>
+</tbody>
+</table>
+<p>For Junyuan primary school, the five digit numbers refers to the <a href="https://bit.ly/2Sak5c2">bus stop number</a>. Let’s fix these.</p>
+<pre class="r"><code>#manually removing
+buses_clean &lt;- buses_clean %&gt;% 
+  filter(!buses == &quot;000&quot;,
+         nchar(buses) &lt;= 4)</code></pre>
+<p>Were there any schools which did not have bus data extracted?</p>
+<pre class="r"><code>pri_sch %&gt;% 
+  anti_join(buses_clean, by = &quot;school_name&quot;) %&gt;% 
+  select(school_name, bus_desc)</code></pre>
+<pre><code>## # A tibble: 6 x 2
+##   school_name                   bus_desc                                    
+##   &lt;chr&gt;                         &lt;chr&gt;                                       
+## 1 Clementi Primary School       We Are Just Beside Clementi Bus Interchange.
+## 2 North Vista Primary School    Na                                          
+## 3 Punggol Green Primary School  Na                                          
+## 4 Tanjong Katong Primary School Na                                          
+## 5 Valour Primary School         Na                                          
+## 6 Yumin Primary School          Na</code></pre>
+<p>More data entry errors - I’ll leave these as it is for now, and do some feature imputing to replace these missing values later.</p>
+<pre class="r"><code>bus_count &lt;- buses_clean %&gt;% 
+  group_by(school_name) %&gt;% 
+  summarize(bus_count = n()) %&gt;% 
+  ungroup()
+
+bus_count</code></pre>
+<pre><code>## # A tibble: 180 x 2
+##    school_name                    bus_count
+##    &lt;chr&gt;                              &lt;int&gt;
+##  1 Admiralty Primary School               3
+##  2 Ahmad Ibrahim Primary School           6
+##  3 Ai Tong School                         3
+##  4 Alexandra Primary School               5
+##  5 Anchor Green Primary School            3
+##  6 Anderson Primary School                3
+##  7 Ang Mo Kio Primary School              6
+##  8 Anglo-Chinese School (Junior)         11
+##  9 Anglo-Chinese School (Primary)         6
+## 10 Angsana Primary School                10
+## # ... with 170 more rows</code></pre>
+<p>Which primary schools have access to the most buses?</p>
+<pre class="r"><code>bus_count %&gt;% 
+  arrange(desc(bus_count)) %&gt;% 
+  inner_join(pri_sch) %&gt;% 
+  select(school_name, bus_count, bus_desc)</code></pre>
+<pre><code>## # A tibble: 180 x 3
+##    school_name               bus_count bus_desc                                 
+##    &lt;chr&gt;                         &lt;int&gt; &lt;chr&gt;                                    
+##  1 Junyuan Primary School           22 76281: 22, 46, 129 76061: 10, 15, 20, 21~
+##  2 Fuhua Primary School             18 Jurong East Central (Bs28441): 41,49,52,~
+##  3 Maha Bodhi School                17 5,8,15,22,25,45,51,55,59,61,63,63m,65,66~
+##  4 Nanyang Primary School           17 66, 67, 74, 93, 151, 153, 154, 156, 157,~
+##  5 Bendemeer Primary School         16 13 23 31 61 64 65 65m 66 125, 125x ,133,~
+##  6 Chij (Katong) Primary            15 15, 55, 36, 16, 135, 197, 196, 31, 13, 7~
+##  7 Hong Wen School                  15 Serangoon Road: 13, 23, 31, 64, 65, 66, ~
+##  8 Singapore Chinese Girls&#39;~        15 66, 67, 105, 132, 151, 153, 154, 156, 17~
+##  9 Ngee Ann Primary School          14 13, 16, 16m, 31,36, 43, 47, 48, 55, 135,~
+## 10 Seng Kang Primary School         14 27, 80, 82, 83, 86, 87, 88, 89, 119, 156~
+## # ... with 170 more rows</code></pre>
+<div id="visualization" class="section level3">
+<h3>Visualization</h3>
+<p>The visualization of the relationships (interconnections) between the schools by the buses can be done using a network graph.</p>
+<pre class="r"><code>set.seed(2021)
+
+buses_clean %&gt;% 
+  mutate(school_name = str_remove(school_name, &quot;[:punct:]Primary[:punct:]&quot;),
+         school_name = str_trim(str_remove(school_name, &quot;School|Primary School&quot;))) %&gt;% 
+  pairwise_cor(school_name, buses, sort = TRUE) %&gt;%
+  filter(correlation &gt; 0.7) %&gt;%
+  graph_from_data_frame() %&gt;%
+  ggraph(layout = &quot;fr&quot;) +
+  geom_edge_link(aes(edge_alpha = correlation),
+                 edge_width = 1,
+                 show.legend = FALSE) +
+  geom_node_point(color = &quot;lightblue&quot;, size = 3) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    check_overlap = TRUE,
+    fontface = &quot;bold&quot;,
+    vjust = &quot;inward&quot;,
+    hjust = -0.2
+  ) +
+  labs(title = &quot;Which primary schools share common buses?&quot;,
+       subtitle = &quot;Darker lines indicates higher correlation.&quot;,
+       caption = &quot;Source: data.gov.sg/dataset/school-directory-and-information&quot;) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+  )</code></pre>
+<p><img src="/post/2021-07-06-grouping-primary-schools-with-clustering/2021-07-06-grouping-primary-schools-with-clustering_files/figure-html/buses%20network%20graph-1.png" width="1152" /></p>
+<p>Here’s the Canberra/Endeavour/Northoaks/Sembawang pri school cluster on Google Maps:</p>
+<div class="figure">
+<img src="https://raw.githubusercontent.com/DesmondChoy/DataSets/master/sembawang_cluster.png" alt="" />
+<p class="caption">Sembawang cluster</p>
+</div>
+</div>
+</div>
+<div id="accessability-mrtlrt" class="section level2">
+<h2>Accessability: MRT/LRT</h2>
+<p>Let’s do the same for MRT/LRT stations.</p>
+<pre class="r"><code>pri_sch %&gt;%
+  select(school_name, mrt_desc) %&gt;% 
+  head(n = 5) %&gt;% 
+  #highlighting some messy data
+  bind_rows(pri_sch %&gt;%
+              select(school_name, mrt_desc) %&gt;%
+              filter(str_detect(
+                school_name, &quot;Canossa|Gongshang|Junyuan|North Vista|Sembawang&quot;))) %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="29%" />
+<col width="70%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">mrt_desc</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Admiralty Primary School</td>
+<td align="left">Admiralty Station</td>
+</tr>
+<tr class="even">
+<td align="left">Ahmad Ibrahim Primary School</td>
+<td align="left">Yishun</td>
+</tr>
+<tr class="odd">
+<td align="left">Ai Tong School</td>
+<td align="left">Bishan Mrt</td>
+</tr>
+<tr class="even">
+<td align="left">Alexandra Primary School</td>
+<td align="left">Redhill Station Tiong Bahru Station</td>
+</tr>
+<tr class="odd">
+<td align="left">Anchor Green Primary School</td>
+<td align="left">Mrt : Ne16-Sengkang Lrt : Sw7-Tongkang</td>
+</tr>
+<tr class="even">
+<td align="left">Canossa Catholic Primary School</td>
+<td align="left">Nearest Mrt Station: Mattar Station (About 7-Minute Walk)</td>
+</tr>
+<tr class="odd">
+<td align="left">Gongshang Primary School</td>
+<td align="left">Tampines (Downtown Line And East West Line) And Tampines East (Downtown Line)</td>
+</tr>
+<tr class="even">
+<td align="left">Junyuan Primary School</td>
+<td align="left">Tampines West (Downtown Line); Tampines (East-West Line)</td>
+</tr>
+<tr class="odd">
+<td align="left">North Vista Primary School</td>
+<td align="left">Buangkok Mrt (Ne15), Ranggung Lrt (Se5)</td>
+</tr>
+<tr class="even">
+<td align="left">Sembawang Primary School</td>
+<td align="left">Sembawang Mrt (6 To 8-Minute Walk)</td>
+</tr>
+</tbody>
+</table>
+<p>The data related to MRT descriptions is significantly messier than bus descriptions. Once again, I’ll attempt to use regex to coherently extract MRT data from <code>mrt_desc</code>.</p>
+<p>First off, <code>mrt_desc</code> includes which line the station is on e.g. downtown line. This is troublesome because there’s also a station called Downtown. Picking up the words in this case would be double counting. Here, I’m removing words before “line”.</p>
+<pre class="r"><code>mrt_clean &lt;- pri_sch %&gt;%
+  mutate(
+    mrt_desc = str_to_lower(mrt_desc),
+    mrt_desc_clean = str_remove_all(mrt_desc, &quot;[:alpha:]+[:blank:]+line+&quot;)
+  )
+
+mrt_clean %&gt;% 
+  filter(str_detect(mrt_desc, &quot;line&quot;)) %&gt;% 
+  select(school_name, mrt_desc, mrt_desc_clean) %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="17%" />
+<col width="47%" />
+<col width="34%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">mrt_desc</th>
+<th align="left">mrt_desc_clean</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Gongshang Primary School</td>
+<td align="left">tampines (downtown line and east west line) and tampines east (downtown line)</td>
+<td align="left">tampines ( and east ) and tampines east ()</td>
+</tr>
+<tr class="even">
+<td align="left">Junyuan Primary School</td>
+<td align="left">tampines west (downtown line); tampines (east-west line)</td>
+<td align="left">tampines west (); tampines (east-)</td>
+</tr>
+<tr class="odd">
+<td align="left">St. Gabriel’s Primary School</td>
+<td align="left">lor chuan mrt station (circle line)</td>
+<td align="left">lor chuan mrt station ()</td>
+</tr>
+<tr class="even">
+<td align="left">Yu Neng Primary School</td>
+<td align="left">bedok mrt station (east-west line), bedok reservoir mrt station (downtown line)</td>
+<td align="left">bedok mrt station (east-), bedok reservoir mrt station ()</td>
+</tr>
+</tbody>
+</table>
+<p>Next, I found a list of <a href="https://data.gov.sg/dataset/train-station-chinese-names">all MRT &amp; LRT lines</a> online.</p>
+<pre class="r"><code>station_names &lt;- read_csv(&quot;https://raw.githubusercontent.com/DesmondChoy/DataSets/master/train-station-chinese-names.csv&quot;) %&gt;% 
+  select(-mrt_station_chinese, -mrt_line_chinese) %&gt;% 
+  mutate(across(where(is.character), str_to_lower))
+
+station_names</code></pre>
+<pre><code>## # A tibble: 184 x 3
+##    stn_code mrt_station_english mrt_line_english
+##    &lt;chr&gt;    &lt;chr&gt;               &lt;chr&gt;           
+##  1 ns1      jurong east         north south line
+##  2 ns2      bukit batok         north south line
+##  3 ns3      bukit gombak        north south line
+##  4 ns4      choa chu kang       north south line
+##  5 ns5      yew tee             north south line
+##  6 ns7      kranji              north south line
+##  7 ns8      marsiling           north south line
+##  8 ns9      woodlands           north south line
+##  9 ns10     admiralty           north south line
+## 10 ns11     sembawang           north south line
+## # ... with 174 more rows</code></pre>
+<p>Here’s how I intend to identify each MRT/LRT station linked to each primary school:</p>
+<ul>
+<li>First, <code>unnest_tokens</code> to break down <code>mrt_desc</code> into 1, 2 and 3 tokens.</li>
+<li>Then, inner join all tokens to the station names from <code>station_names</code>.</li>
+</ul>
+<p>Why 1, 2 and 3 tokens? Take a look at CHIJ St. Nic for example.</p>
+<pre class="r"><code>mrt_clean %&gt;% 
+  filter(str_detect(school_name, &quot;Chij St. Nicholas Girls&#39; School&quot;)) %&gt;% 
+  select(school_name, mrt_desc_clean)</code></pre>
+<pre><code>## # A tibble: 1 x 2
+##   school_name                  mrt_desc_clean                                   
+##   &lt;chr&gt;                        &lt;chr&gt;                                            
+## 1 Chij St. Nicholas Girls&#39; Sc~ ang mo kio mrt, yio chu kang mrt, mayflower mrt ~</code></pre>
+<p>Breaking it down into one token, we get:</p>
+<pre class="r"><code>mrt_clean %&gt;% 
+  filter(str_detect(school_name, &quot;Chij St. Nicholas Girls&#39; School&quot;)) %&gt;% 
+  unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 1, drop = FALSE) %&gt;%
+  select(school_name, mrt_desc, word)</code></pre>
+<pre><code>## # A tibble: 12 x 3
+##    school_name               mrt_desc                                    word   
+##    &lt;chr&gt;                     &lt;chr&gt;                                       &lt;chr&gt;  
+##  1 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ ang    
+##  2 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ mo     
+##  3 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ kio    
+##  4 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ mrt    
+##  5 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ yio    
+##  6 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ chu    
+##  7 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ kang   
+##  8 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ mrt    
+##  9 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ mayflo~
+## 10 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ mrt    
+## 11 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ end    
+## 12 Chij St. Nicholas Girls&#39;~ ang mo kio mrt, yio chu kang mrt, mayflowe~ 2021</code></pre>
+<p>Then inner joining to <code>station_names</code>:</p>
+<pre class="r"><code>mrt_clean %&gt;% 
+  filter(str_detect(school_name, &quot;Chij St. Nicholas Girls&#39; School&quot;)) %&gt;% 
+  unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 1, drop = FALSE) %&gt;%
+  inner_join(station_names, by = c(&quot;word&quot; = &quot;mrt_station_english&quot;))</code></pre>
+<pre><code>## # A tibble: 0 x 35
+## # ... with 35 variables: school_name &lt;chr&gt;, url_address &lt;chr&gt;, address &lt;chr&gt;,
+## #   postal_code &lt;chr&gt;, telephone_no &lt;chr&gt;, telephone_no_2 &lt;chr&gt;, fax_no &lt;chr&gt;,
+## #   fax_no_2 &lt;chr&gt;, email_address &lt;chr&gt;, mrt_desc &lt;chr&gt;, bus_desc &lt;chr&gt;,
+## #   principal_name &lt;chr&gt;, first_vp_name &lt;chr&gt;, second_vp_name &lt;chr&gt;,
+## #   third_vp_name &lt;chr&gt;, fourth_vp_name &lt;chr&gt;, fifth_vp_name &lt;chr&gt;,
+## #   sixth_vp_name &lt;chr&gt;, dgp_code &lt;chr&gt;, zone_code &lt;chr&gt;, type_code &lt;chr&gt;,
+## #   nature_code &lt;chr&gt;, session_code &lt;chr&gt;, mainlevel_code &lt;chr&gt;, sap_ind &lt;chr&gt;,
+## #   autonomous_ind &lt;chr&gt;, gifted_ind &lt;chr&gt;, ip_ind &lt;chr&gt;,
+## #   mothertongue1_code &lt;chr&gt;, mothertongue2_code &lt;chr&gt;,
+## #   mothertongue3_code &lt;chr&gt;, mrt_desc_clean &lt;chr&gt;, word &lt;chr&gt;, stn_code &lt;chr&gt;,
+## #   mrt_line_english &lt;chr&gt;</code></pre>
+<p>No MRT stations were picked up because to obtain “ang mo kio” and “yio chu kang” required <code>ngrams = 3</code>.</p>
+<pre class="r"><code>mrt_clean %&gt;% 
+  filter(str_detect(school_name, &quot;Chij St. Nicholas Girls&#39; School&quot;)) %&gt;% 
+  unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 3, drop = FALSE) %&gt;%
+  inner_join(station_names, by = c(&quot;word&quot; = &quot;mrt_station_english&quot;)) %&gt;% 
+  select(school_name, mrt_desc, word) %&gt;% 
+  kable()</code></pre>
+<table>
+<colgroup>
+<col width="30%" />
+<col width="56%" />
+<col width="12%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">school_name</th>
+<th align="left">mrt_desc</th>
+<th align="left">word</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Chij St. Nicholas Girls’ School</td>
+<td align="left">ang mo kio mrt, yio chu kang mrt, mayflower mrt (end 2021)</td>
+<td align="left">ang mo kio</td>
+</tr>
+<tr class="even">
+<td align="left">Chij St. Nicholas Girls’ School</td>
+<td align="left">ang mo kio mrt, yio chu kang mrt, mayflower mrt (end 2021)</td>
+<td align="left">yio chu kang</td>
+</tr>
+</tbody>
+</table>
+<p>Note: Mayflower mrt wasn’t picked up because it isn’t listed in the <code>station_names</code> dataset.</p>
+<pre class="r"><code>mrt_clean_id &lt;- mrt_clean %&gt;% 
+  unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 1, drop = FALSE) %&gt;%
+  inner_join(station_names, by = c(&quot;word&quot; = &quot;mrt_station_english&quot;)) %&gt;%
+  bind_rows(
+    mrt_clean %&gt;%
+    unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 2, drop = FALSE) %&gt;%
+    inner_join(station_names, by = c(&quot;word&quot; = &quot;mrt_station_english&quot;))) %&gt;% 
+  bind_rows(
+    mrt_clean %&gt;%
+    unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 3, drop = FALSE) %&gt;%
+    inner_join(station_names, by = c(&quot;word&quot; = &quot;mrt_station_english&quot;))) %&gt;% 
+  distinct(school_name, word, .keep_all = TRUE) %&gt;%
+  arrange(school_name)</code></pre>
+<p>Were there any schools which did not have mrt data extracted?</p>
+<pre class="r"><code>pri_sch %&gt;%
+  anti_join(mrt_clean_id %&gt;%
+              distinct(school_name)) %&gt;%
+  select(school_name, mrt_desc)</code></pre>
+<pre><code>## # A tibble: 7 x 2
+##   school_name                   mrt_desc                           
+##   &lt;chr&gt;                         &lt;chr&gt;                              
+## 1 Nanyang Primary School        Farrer Rd Mrt Station              
+## 2 Ngee Ann Primary School       Nil                                
+## 3 Northshore Primary School     Puggol Point Lrt Station           
+## 4 St. Gabriel&#39;s Primary School  Lor Chuan Mrt Station (Circle Line)
+## 5 Tanjong Katong Primary School Na                                 
+## 6 Valour Primary School         Na                                 
+## 7 Xinmin Primary School         Nil</code></pre>
+<p>At this point, my mind has been calloused for data entry errors and shorthands used. Let’s fix this and re-run our unnest token sequence.</p>
+<pre class="r"><code>mrt_clean &lt;- mrt_clean %&gt;% 
+  mutate(mrt_desc = case_when(
+    school_name == &quot;Nanyang Primary School&quot; ~ &quot;Farrer Road Mrt Station&quot;,
+    school_name == &quot;Northshore Primary School&quot; ~ &quot;Punggol Point Lrt Station &quot;,
+    school_name == &quot;St. Gabriel&#39;s Primary School&quot; ~ &quot;Lorong Chuan Mrt Station&quot;,
+    TRUE ~ mrt_desc
+  ))
+
+mrt_clean_id &lt;- mrt_clean %&gt;% 
+  unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 1, drop = FALSE) %&gt;%
+  inner_join(station_names, by = c(&quot;word&quot; = &quot;mrt_station_english&quot;)) %&gt;%
+  bind_rows(
+    mrt_clean %&gt;%
+    unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 2, drop = FALSE) %&gt;%
+    inner_join(station_names, by = c(&quot;word&quot; = &quot;mrt_station_english&quot;))) %&gt;% 
+  bind_rows(
+    mrt_clean %&gt;%
+    unnest_tokens(word, mrt_desc, token = &quot;ngrams&quot;, n = 3, drop = FALSE) %&gt;%
+    inner_join(station_names, by = c(&quot;word&quot; = &quot;mrt_station_english&quot;))) %&gt;% 
+  distinct(school_name, word, .keep_all = TRUE) %&gt;%
+  arrange(school_name)</code></pre>
+<div id="visualization-1" class="section level3">
+<h3>Visualization</h3>
+<pre class="r"><code>set.seed(2021)
+
+mrt_clean_id %&gt;% 
+  mutate(school_name = str_remove(school_name, &quot;[:punct:]Primary[:punct:]&quot;),
+         school_name = str_trim(str_remove(school_name, &quot;School|Primary School&quot;))) %&gt;% 
+  pairwise_cor(school_name, word, sort = TRUE) %&gt;%
+  filter(correlation &gt; 0.8) %&gt;%
+  graph_from_data_frame() %&gt;%
+  ggraph(layout = &quot;fr&quot;) +
+  geom_edge_link(aes(edge_alpha = correlation),
+                 edge_width = 1,
+                 show.legend = FALSE) +
+  geom_node_point(color = &quot;lightblue&quot;, size = 3) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    check_overlap = TRUE,
+    fontface = &quot;bold&quot;,
+    vjust = &quot;inward&quot;,
+    hjust = -0.2
+  ) +
+  labs(title = &quot;Which primary schools share common MRT/LRT stations?&quot;,
+       subtitle = &quot;Darker lines indicates higher correlation.&quot;,
+       caption = &quot;Source: data.gov.sg/dataset/school-directory-and-information&quot;) +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+  )</code></pre>
+<p><img src="/post/2021-07-06-grouping-primary-schools-with-clustering/2021-07-06-grouping-primary-schools-with-clustering_files/figure-html/station%20network%20graph-1.png" width="1152" /></p>
+<pre class="r"><code>mrt_count &lt;- mrt_clean_id %&gt;% 
+  group_by(school_name) %&gt;% 
+  summarize(station_count = n()) %&gt;% 
+  ungroup()
+
+mrt_count</code></pre>
+<pre><code>## # A tibble: 182 x 2
+##    school_name                    station_count
+##    &lt;chr&gt;                                  &lt;int&gt;
+##  1 Admiralty Primary School                   1
+##  2 Ahmad Ibrahim Primary School               1
+##  3 Ai Tong School                             1
+##  4 Alexandra Primary School                   2
+##  5 Anchor Green Primary School                2
+##  6 Anderson Primary School                    1
+##  7 Ang Mo Kio Primary School                  1
+##  8 Anglo-Chinese School (Junior)              1
+##  9 Anglo-Chinese School (Primary)             1
+## 10 Angsana Primary School                     2
+## # ... with 172 more rows</code></pre>
+</div>
+</div>
+<div id="final-features" class="section level2">
+<h2>Final features</h2>
+<p>Let’s merge all the features together…</p>
+<pre class="r"><code>final_features &lt;- features %&gt;%
+  left_join(affiliation %&gt;%
+              mutate(affiliated = 1)) %&gt;% 
+  mutate(affiliated = replace_na(affiliated, 0)) %&gt;% 
+  inner_join(pop_grouping) %&gt;% 
+  left_join(bus_count) %&gt;% 
+  left_join(mrt_count)
+
+final_features %&gt;% 
+  slice_sample(n = 10)</code></pre>
+<pre><code>## # A tibble: 10 x 10
+##    school_name      zone_code dgp_code nature_code gifted_ind sap_ind affiliated
+##    &lt;chr&gt;            &lt;chr&gt;     &lt;chr&gt;    &lt;chr&gt;       &lt;chr&gt;      &lt;chr&gt;        &lt;dbl&gt;
+##  1 Sembawang Prima~ North     Sembawa~ Co-Ed Scho~ No         No               0
+##  2 Lakeside Primar~ West      Jurong ~ Co-Ed Scho~ No         No               0
+##  3 Pioneer Primary~ West      Jurong ~ Co-Ed Scho~ No         No               0
+##  4 Juying Primary ~ West      Jurong ~ Co-Ed Scho~ No         No               0
+##  5 De La Salle Sch~ West      Choa Ch~ Co-Ed Scho~ No         No               1
+##  6 Fairfield Metho~ South     Queenst~ Co-Ed Scho~ No         No               1
+##  7 Stamford Primar~ South     Central  Co-Ed Scho~ No         No               0
+##  8 Zhonghua Primar~ South     Serango~ Co-Ed Scho~ No         No               0
+##  9 Cantonment Prim~ South     Bukit M~ Co-Ed Scho~ No         No               0
+## 10 Canossa Catholi~ East      Geylang  Co-Ed Scho~ No         No               1
+## # ... with 3 more variables: pop_decile &lt;int&gt;, bus_count &lt;int&gt;,
+## #   station_count &lt;int&gt;</code></pre>
+<p>These will be the data points when performing clustering on <code>pri_sch</code>.</p>
+<pre class="r"><code>glimpse(final_features)</code></pre>
+<pre><code>## Rows: 186
+## Columns: 10
+## $ school_name   &lt;chr&gt; &quot;Admiralty Primary School&quot;, &quot;Ahmad Ibrahim Primary Schoo~
+## $ zone_code     &lt;chr&gt; &quot;North&quot;, &quot;North&quot;, &quot;South&quot;, &quot;South&quot;, &quot;North&quot;, &quot;North&quot;, &quot;S~
+## $ dgp_code      &lt;chr&gt; &quot;Woodlands&quot;, &quot;Yishun&quot;, &quot;Bishan&quot;, &quot;Bukit Merah&quot;, &quot;Seng Ka~
+## $ nature_code   &lt;chr&gt; &quot;Co-Ed School&quot;, &quot;Co-Ed School&quot;, &quot;Co-Ed School&quot;, &quot;Co-Ed S~
+## $ gifted_ind    &lt;chr&gt; &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;Yes&quot;, &quot;~
+## $ sap_ind       &lt;chr&gt; &quot;No&quot;, &quot;No&quot;, &quot;Yes&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;No&quot;, &quot;~
+## $ affiliated    &lt;dbl&gt; 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,~
+## $ pop_decile    &lt;int&gt; 8, 1, 10, 4, 5, 9, 3, 10, 10, 1, 1, 3, 4, 3, 2, 8, 1, 1,~
+## $ bus_count     &lt;int&gt; 3, 6, 3, 5, 3, 3, 6, 11, 6, 10, 7, 7, 16, 2, 8, 2, 1, 10~
+## $ station_count &lt;int&gt; 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 2, 2, 2, 3, 2, 2, 3, 1, 1,~</code></pre>
+</div>
+</div>
+<div id="clustering" class="section level1">
+<h1>Clustering</h1>
+<p>Clustering is a form of unsupervised machine learning algorithm that’s used with unlabeled data. There are a multitude of clustering methods - below I opt to use a popular clustering technique called k-means - it aims to partition the data into clusters and consequently generate labels that groups similar primary schools together.</p>
+<p>Illustration below by Allison Horst:</p>
+<div class="figure">
+<img src="https://www.tidymodels.org/learn/statistics/k-means/kmeans.gif" alt="" />
+<p class="caption">k-means</p>
+</div>
+<div id="pre-processing" class="section level2">
+<h2>Pre-processing</h2>
+<p>The data in <code>final_features</code> needs to be pre-processed before we can cluster:</p>
+<ul>
+<li><code>step_dummy</code>: Converts nominal data (e.g. character or factors) into numeric (kmeans can only take numeric data)</li>
+<li><code>step_normalize</code>: Transforms numeric data to have a standard deviation of one and a mean of zero. Used as a pre-processor as k-means is sensitive to outliers.</li>
+</ul>
+<pre class="r"><code>scaled_features &lt;- final_features %&gt;% 
+  recipe( ~ .) %&gt;% 
+  update_role(school_name, new_role = &quot;id&quot;) %&gt;% 
+  step_impute_bag(bus_count, station_count, trees = 100, seed_val = 2021) %&gt;% 
+  step_dummy(all_nominal_predictors(), one_hot = FALSE) %&gt;%
+  step_normalize(all_predictors()) %&gt;% 
+  prep() %&gt;% 
+  juice()</code></pre>
+<pre class="r"><code>final_features %&gt;% 
+  filter(str_detect(school_name, &quot;Tanjong Katong|Valour&quot;)) %&gt;% 
+  select(school_name, bus_count, station_count)</code></pre>
+<pre><code>## # A tibble: 2 x 3
+##   school_name                   bus_count station_count
+##   &lt;chr&gt;                             &lt;int&gt;         &lt;int&gt;
+## 1 Tanjong Katong Primary School        NA            NA
+## 2 Valour Primary School                NA            NA</code></pre>
+<pre class="r"><code>scaled_features %&gt;%
+  filter(str_detect(school_name, &quot;Tanjong Katong|Valour&quot;)) %&gt;%
+  select(school_name, bus_count, station_count)</code></pre>
+<pre><code>## # A tibble: 2 x 3
+##   school_name                   bus_count station_count
+##   &lt;fct&gt;                             &lt;dbl&gt;         &lt;dbl&gt;
+## 1 Tanjong Katong Primary School     1.25          0.955
+## 2 Valour Primary School            -0.625         0.955</code></pre>
+</div>
+<div id="how-many-clusters-are-appropriate" class="section level2">
+<h2>How many clusters are appropriate?</h2>
+<p>Because I don’t know <em>a priori</em> how many clusters are ideal, I’ll test out 2-10 clusters and subsequently proceed to conduct further analysis.</p>
+<p>Tidymodels has a <a href="https://www.tidymodels.org/learn/statistics/k-means/">great section</a> on how the library <code>broom</code> can be leveraged to visualize clustering results.</p>
+<pre class="r"><code>points &lt;- scaled_features %&gt;% 
+  select(-school_name)
+
+set.seed(2021)
+kclusts &lt;-
+  tibble(k = 2:20) %&gt;%
+  mutate(
+    kclust = map(k, ~ kmeans(points, .x)),
+    tidied = map(kclust, tidy),
+    glanced = map(kclust, glance),
+    augmented = map(kclust, augment, points)
+  )
+
+kclusts</code></pre>
+<pre><code>## # A tibble: 19 x 5
+##        k kclust   tidied             glanced          augmented          
+##    &lt;int&gt; &lt;list&gt;   &lt;list&gt;             &lt;list&gt;           &lt;list&gt;             
+##  1     2 &lt;kmeans&gt; &lt;tibble [2 x 40]&gt;  &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+##  2     3 &lt;kmeans&gt; &lt;tibble [3 x 40]&gt;  &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+##  3     4 &lt;kmeans&gt; &lt;tibble [4 x 40]&gt;  &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+##  4     5 &lt;kmeans&gt; &lt;tibble [5 x 40]&gt;  &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+##  5     6 &lt;kmeans&gt; &lt;tibble [6 x 40]&gt;  &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+##  6     7 &lt;kmeans&gt; &lt;tibble [7 x 40]&gt;  &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+##  7     8 &lt;kmeans&gt; &lt;tibble [8 x 40]&gt;  &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+##  8     9 &lt;kmeans&gt; &lt;tibble [9 x 40]&gt;  &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+##  9    10 &lt;kmeans&gt; &lt;tibble [10 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 10    11 &lt;kmeans&gt; &lt;tibble [11 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 11    12 &lt;kmeans&gt; &lt;tibble [12 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 12    13 &lt;kmeans&gt; &lt;tibble [13 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 13    14 &lt;kmeans&gt; &lt;tibble [14 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 14    15 &lt;kmeans&gt; &lt;tibble [15 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 15    16 &lt;kmeans&gt; &lt;tibble [16 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 16    17 &lt;kmeans&gt; &lt;tibble [17 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 17    18 &lt;kmeans&gt; &lt;tibble [18 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 18    19 &lt;kmeans&gt; &lt;tibble [19 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;
+## 19    20 &lt;kmeans&gt; &lt;tibble [20 x 40]&gt; &lt;tibble [1 x 4]&gt; &lt;tibble [186 x 38]&gt;</code></pre>
+<p>For each combination of clusters, <code>augment</code> returns the original 186 points from the original data <code>scaled_features</code>. This can be used to assess how the clusters are mapped across, say, <code>pop_decile</code>.</p>
+<p><code>glance</code> extracts a single row summary of each combination of clusters, and allows the plotting of the total within-cluster sum of square (WSS). WSS measures the compactness of the clustering and the idea is the ideal number of clusters should minimize WSS.</p>
+<pre class="r"><code>kclusts %&gt;%
+  unnest(cols = c(glanced)) %&gt;% 
+  ggplot(aes(k, tot.withinss)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = seq(0, 20, 2))</code></pre>
+<p><img src="/post/2021-07-06-grouping-primary-schools-with-clustering/2021-07-06-grouping-primary-schools-with-clustering_files/figure-html/unnamed-chunk-36-1.png" width="1152" /></p>
+<p>Plotting out the WSS across 2-20 clusters, there is a slight <a href="https://uc-r.github.io/kmeans_clustering#elbow">elbow/bend</a> after cluster 7 - indicating additional clusters beyond that will provide lesser incremental improvement to minimizing WSS. Also interesting to note that increasing cluster size from 14 -&gt; 15 actually increases WSS, but then decreases at 16.</p>
+<p>For now, let’s go with 7 clusters.</p>
+<pre class="r"><code>set.seed(2020)
+
+final_cluster &lt;- scaled_features %&gt;% 
+  select(-school_name) %&gt;% 
+  kmeans(centers = 7, iter.max = 20)
+
+final_cluster %&gt;% 
+  augment(final_features) %&gt;% 
+  count(.cluster)</code></pre>
+<pre><code>## # A tibble: 7 x 2
+##   .cluster     n
+##   &lt;fct&gt;    &lt;int&gt;
+## 1 1          123
+## 2 2           22
+## 3 3            6
+## 4 4            6
+## 5 5           12
+## 6 6            5
+## 7 7           12</code></pre>
+<p>There is a major cluster (Cluster 1) that comprises of 123 schools, or 66% of our total schools. There are also three medium clusters (Cluster 2, 5, and 7) and three smaller clusters (Cluster 3, 4 and 6).</p>
+</div>
+<div id="cluster-analysis" class="section level2">
+<h2>Cluster analysis</h2>
+<p>Let’s use <a href="https://github.com/hrbrmstr/waffle">waffle</a> charts (from the <code>waffle</code> library) to visualize how the clusters are distributed.</p>
+<pre class="r"><code>final_cluster %&gt;%
+  augment(final_features) %&gt;%
+  count(pop_decile, .cluster) %&gt;% 
+  ggplot(aes(fill = .cluster, values = n)) +
+  geom_waffle(color = &quot;white&quot;,
+              size = .25,
+              n_rows = 5) +
+  facet_wrap( ~ pop_decile, ncol = 5) +
+  scale_fill_tableau() +
+  coord_equal() +
+  labs(title = &quot;Cluster distribution by popularity decile&quot;,
+       subtitle = &quot;Cluster 5 seems to have a slightly disproportionate weighting\nin the highest popularity decile&quot;,
+       fill = &quot;Cluster #&quot;) +
+  theme_enhance_waffle() +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+  ) </code></pre>
+<p><img src="/post/2021-07-06-grouping-primary-schools-with-clustering/2021-07-06-grouping-primary-schools-with-clustering_files/figure-html/unnamed-chunk-38-1.png" width="1152" /></p>
+<pre class="r"><code>final_cluster %&gt;%
+  augment(final_features) %&gt;%
+  count(zone_code, .cluster) %&gt;% 
+  ggplot(aes(fill = .cluster, values = n)) +
+  geom_waffle(color = &quot;white&quot;,
+              size = .25,
+              n_rows = 5) +
+  facet_wrap( ~ zone_code, ncol = 2) +
+  scale_fill_tableau() +
+  coord_equal() +
+  labs(title = &quot;Cluster distribution by zone code&quot;,
+       subtitle = &quot;Clusters 3/4 &amp; clusters 6/7 are exclusive to the\nNorth and East zones respectively&quot;,
+       fill = &quot;Cluster #&quot;) +
+  theme_enhance_waffle() +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 15),
+  ) </code></pre>
+<p><img src="/post/2021-07-06-grouping-primary-schools-with-clustering/2021-07-06-grouping-primary-schools-with-clustering_files/figure-html/unnamed-chunk-39-1.png" width="1152" /></p>
+<pre class="r"><code>final_cluster %&gt;%
+  augment(final_features) %&gt;%
+  count(dgp_code, .cluster) %&gt;%
+  ggplot(aes(fill = .cluster, values = n)) +
+  geom_waffle(color = &quot;white&quot;,
+              size = 0.5,
+              n_rows = 3) +
+  facet_wrap( ~ dgp_code, ncol = 9) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  scale_fill_tableau() +
+  coord_equal() +
+  labs(title = &quot;Cluster distribution by zone code&quot;,
+       subtitle = &quot;Once again, certain clusters are found only in certain exclusive dgb_code areas&quot;,
+       fill = &quot;Cluster #&quot;) +
+  theme_enhance_waffle() +
+  theme(
+    plot.title = element_text(face = &quot;bold&quot;, size = 20),
+    plot.subtitle = element_text(size = 17),
+    strip.background = element_blank(),
+    strip.text = element_text(face = &quot;bold&quot;, size = 10),
+  )</code></pre>
+<p><img src="/post/2021-07-06-grouping-primary-schools-with-clustering/2021-07-06-grouping-primary-schools-with-clustering_files/figure-html/unnamed-chunk-40-1.png" width="1152" /></p>
+</div>
+</div>
+<div id="explore-clusters-via-an-interactive-table" class="section level1">
+<h1>Explore clusters via an interactive table</h1>
+<p>I made a simple table with filters, should you wish to explore the clusters. How I would recommend using this table:</p>
+<ul>
+<li><p>If you’ve already shortlisted some schools, type in the school name and see which cluster the school is in. Then compare it to other schools within that cluster.</p></li>
+<li><p>If you haven’t yet identified a school, perhaps filter by location (zone/urban area) first, identify clusters in the area, then compare schools within those clusters.</p></li>
+</ul>
+<pre class="r"><code>cluster_data &lt;- final_cluster %&gt;%
+  augment(final_features) %&gt;% 
+  relocate(.cluster)
+
+data &lt;- SharedData$new(cluster_data)
+
+bscols(
+  widths = c(2, 10),
+  list(
+    filter_checkbox(&quot;type&quot;, &quot;Cluster&quot;, data, ~ .cluster),
+    filter_select(&quot;type&quot;, &quot;School&quot;, data, ~ school_name),
+    filter_checkbox(&quot;type&quot;, &quot;Zone&quot;, data, ~ zone_code),
+    filter_select(&quot;type&quot;, &quot;Urban area&quot;, data, ~ dgp_code)
+  ),
+  reactable(
+    data,
+    defaultColDef = colDef(headerStyle = list(background = &quot;#00AFBB&quot;)),
+    showPageSizeOptions = TRUE,
+    pageSizeOptions = c(5, 10, 20),
+    defaultPageSize = 10,
+    filterable = TRUE,
+    minRows = 5,
+    highlight = TRUE,
+    striped = TRUE,
+    paginationType = &quot;simple&quot;,
+    theme = reactableTheme(
+      borderColor = &quot;#dfe2e5&quot;,
+      stripedColor = &quot;#f6f8fa&quot;,
+      highlightColor = &quot;#f0f5f9&quot;,
+      cellPadding = &quot;8px 12px&quot;,
+      style = list(fontFamily = &quot;Helvetica&quot;),
+      searchInputStyle = list(width = &quot;100%&quot;)
+    )
+  )
+)</code></pre>
+<div class="container-fluid crosstalk-bscols">
+<div class="fluid-row">
+<div class="col-xs-2">
+<div id="type" class="form-group crosstalk-input-checkboxgroup crosstalk-input">
+<label class="control-label" for="type">Cluster</label>
+<div class="crosstalk-options-group">
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="1"/>
+<span>1</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="2"/>
+<span>2</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="3"/>
+<span>3</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="4"/>
+<span>4</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="5"/>
+<span>5</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="6"/>
+<span>6</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="7"/>
+<span>7</span>
+</label>
+</div>
+</div>
+<script type="application/json" data-for="type">{
+  "map": {
+    "1": ["2", "4", "5", "6", "7", "10", "11", "12", "13", "14", "15", "16", "17", "18", "21", "24", "25", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "49", "50", "51", "52", "53", "54", "55", "57", "58", "60", "61", "62", "68", "69", "70", "71", "73", "74", "75", "76", "77", "78", "79", "80", "82", "84", "85", "90", "91", "95", "98", "99", "100", "101", "102", "103", "104", "106", "107", "108", "109", "113", "115", "116", "117", "118", "119", "120", "121", "122", "123", "124", "126", "127", "129", "130", "132", "134", "136", "137", "138", "141", "142", "145", "151", "152", "153", "154", "156", "157", "158", "159", "160", "161", "162", "163", "165", "166", "167", "168", "173", "174", "175", "176", "177", "178", "179", "180", "181", "182", "183", "184", "185", "186"],
+    "2": ["8", "9", "26", "27", "28", "29", "30", "31", "32", "67", "87", "89", "93", "94", "112", "140", "143", "144", "146", "148", "149", "150"],
+    "3": ["22", "45", "92", "110", "111", "169"],
+    "4": ["20", "47", "59", "65", "81", "86"],
+    "5": ["3", "23", "64", "66", "83", "96", "97", "114", "128", "133", "147", "155"],
+    "6": ["19", "46", "105", "135", "164"],
+    "7": ["1", "48", "56", "63", "72", "88", "125", "131", "139", "170", "171", "172"]
+  },
+  "group": ["SharedDatac5b06c7f"]
+}</script>
+</div>
+<div id="type" class="form-group crosstalk-input-select crosstalk-input">
+<label class="control-label" for="type">School</label>
+<div>
+<select multiple></select>
+<script type="application/json" data-for="type">{
+  "items": {
+    "value": ["Admiralty Primary School", "Ahmad Ibrahim Primary School", "Ai Tong School", "Alexandra Primary School", "Anchor Green Primary School", "Anderson Primary School", "Ang Mo Kio Primary School", "Anglo-Chinese School (Junior)", "Anglo-Chinese School (Primary)", "Angsana Primary School", "Beacon Primary School", "Bedok Green Primary School", "Bendemeer Primary School", "Blangah Rise Primary School", "Boon Lay Garden Primary School", "Bukit Panjang Primary School", "Bukit Timah Primary School", "Bukit View Primary School", "Canberra Primary School", "Canossa Catholic Primary School", "Cantonment Primary School", "Casuarina Primary School", "Catholic High School", "Cedar Primary School", "Changkat Primary School", "Chij (Katong) Primary", "Chij (Kellock)", "Chij Our Lady Of Good Counsel", "Chij Our Lady Of The Nativity", "Chij Our Lady Queen Of Peace", "Chij Primary (Toa Payoh)", "Chij St. Nicholas Girls' School", "Chongfu School", "Chongzheng Primary School", "Chua Chu Kang Primary School", "Clementi Primary School", "Compassvale Primary School", "Concord Primary School", "Corporation Primary School", "Damai Primary School", "Dazhong Primary School", "De La Salle School", "East Spring Primary School", "Edgefield Primary School", "Elias Park Primary School", "Endeavour Primary School", "Eunos Primary School", "Evergreen Primary School", "Fairfield Methodist School (Primary)", "Farrer Park Primary School", "Fengshan Primary School", "Fern Green Primary School", "Fernvale Primary School", "First Toa Payoh Primary School", "Frontier Primary School", "Fuchun Primary School", "Fuhua Primary School", "Gan Eng Seng Primary School", "Geylang Methodist School (Primary)", "Gongshang Primary School", "Greendale Primary School", "Greenridge Primary School", "Greenwood Primary School", "Guangyang Primary School", "Haig Girls' School", "Henry Park Primary School", "Holy Innocents' Primary School", "Hong Wen School", "Horizon Primary School", "Hougang Primary School", "Huamin Primary School", "Innova Primary School", "Jiemin Primary School", "Jing Shan Primary School", "Junyuan Primary School", "Jurong Primary School", "Jurong West Primary School", "Juying Primary School", "Keming Primary School", "Kheng Cheng School", "Kong Hwa School", "Kranji Primary School", "Kuo Chuan Presbyterian Primary School", "Lakeside Primary School", "Lianhua Primary School", "Maha Bodhi School", "Maris Stella High School", "Marsiling Primary School", "Marymount Convent School", "Mayflower Primary School", "Mee Toh School", "Meridian Primary School", "Methodist Girls' School (Primary)", "Montfort Junior School", "Nan Chiau Primary School", "Nan Hua Primary School", "Nanyang Primary School", "Naval Base Primary School", "New Town Primary School", "Ngee Ann Primary School", "North Spring Primary School", "North View Primary School", "North Vista Primary School", "Northland Primary School", "Northoaks Primary School", "Northshore Primary School", "Oasis Primary School", "Opera Estate Primary School", "Palm View Primary School", "Park View Primary School", "Pasir Ris Primary School", "Paya Lebar Methodist Girls' School (Primary)", "Pei Chun Public School", "Pei Hwa Presbyterian Primary School", "Pei Tong Primary School", "Peiying Primary School", "Pioneer Primary School", "Poi Ching School", "Princess Elizabeth Primary School", "Punggol Cove Primary School", "Punggol Green Primary School", "Punggol Primary School", "Punggol View Primary School", "Qifa Primary School", "Qihua Primary School", "Queenstown Primary School", "Radin Mas Primary School", "Raffles Girls' Primary School", "Red Swastika School", "River Valley Primary School", "Riverside Primary School", "Rivervale Primary School", "Rosyth School", "Rulang Primary School", "Sembawang Primary School", "Seng Kang Primary School", "Sengkang Green Primary School", "Shuqun Primary School", "Si Ling Primary School", "Singapore Chinese Girls' Primary School", "South View Primary School", "Springdale Primary School", "St. Andrew's Junior School", "St. Anthony's Canossian Primary School", "St. Anthony's Primary School", "St. Gabriel's Primary School", "St. Hilda's Primary School", "St. Joseph's Institution Junior", "St. Margaret's Primary School", "St. Stephen's School", "Stamford Primary School", "Tampines North Primary School", "Tampines Primary School", "Tanjong Katong Primary School", "Tao Nan School", "Teck Ghee Primary School", "Teck Whye Primary School", "Telok Kurau Primary School", "Temasek Primary School", "Townsville Primary School", "Unity Primary School", "Valour Primary School", "Waterway Primary School", "Wellington Primary School", "West Grove Primary School", "West Spring Primary School", "West View Primary School", "Westwood Primary School", "White Sands Primary School", "Woodgrove Primary School", "Woodlands Primary School", "Woodlands Ring Primary School", "Xinghua Primary School", "Xingnan Primary School", "Xinmin Primary School", "Xishan Primary School", "Yangzheng Primary School", "Yew Tee Primary School", "Yio Chu Kang Primary School", "Yishun Primary School", "Yu Neng Primary School", "Yuhua Primary School", "Yumin Primary School", "Zhangde Primary School", "Zhenghua Primary School", "Zhonghua Primary School"],
+    "label": ["Admiralty Primary School", "Ahmad Ibrahim Primary School", "Ai Tong School", "Alexandra Primary School", "Anchor Green Primary School", "Anderson Primary School", "Ang Mo Kio Primary School", "Anglo-Chinese School (Junior)", "Anglo-Chinese School (Primary)", "Angsana Primary School", "Beacon Primary School", "Bedok Green Primary School", "Bendemeer Primary School", "Blangah Rise Primary School", "Boon Lay Garden Primary School", "Bukit Panjang Primary School", "Bukit Timah Primary School", "Bukit View Primary School", "Canberra Primary School", "Canossa Catholic Primary School", "Cantonment Primary School", "Casuarina Primary School", "Catholic High School", "Cedar Primary School", "Changkat Primary School", "Chij (Katong) Primary", "Chij (Kellock)", "Chij Our Lady Of Good Counsel", "Chij Our Lady Of The Nativity", "Chij Our Lady Queen Of Peace", "Chij Primary (Toa Payoh)", "Chij St. Nicholas Girls' School", "Chongfu School", "Chongzheng Primary School", "Chua Chu Kang Primary School", "Clementi Primary School", "Compassvale Primary School", "Concord Primary School", "Corporation Primary School", "Damai Primary School", "Dazhong Primary School", "De La Salle School", "East Spring Primary School", "Edgefield Primary School", "Elias Park Primary School", "Endeavour Primary School", "Eunos Primary School", "Evergreen Primary School", "Fairfield Methodist School (Primary)", "Farrer Park Primary School", "Fengshan Primary School", "Fern Green Primary School", "Fernvale Primary School", "First Toa Payoh Primary School", "Frontier Primary School", "Fuchun Primary School", "Fuhua Primary School", "Gan Eng Seng Primary School", "Geylang Methodist School (Primary)", "Gongshang Primary School", "Greendale Primary School", "Greenridge Primary School", "Greenwood Primary School", "Guangyang Primary School", "Haig Girls' School", "Henry Park Primary School", "Holy Innocents' Primary School", "Hong Wen School", "Horizon Primary School", "Hougang Primary School", "Huamin Primary School", "Innova Primary School", "Jiemin Primary School", "Jing Shan Primary School", "Junyuan Primary School", "Jurong Primary School", "Jurong West Primary School", "Juying Primary School", "Keming Primary School", "Kheng Cheng School", "Kong Hwa School", "Kranji Primary School", "Kuo Chuan Presbyterian Primary School", "Lakeside Primary School", "Lianhua Primary School", "Maha Bodhi School", "Maris Stella High School", "Marsiling Primary School", "Marymount Convent School", "Mayflower Primary School", "Mee Toh School", "Meridian Primary School", "Methodist Girls' School (Primary)", "Montfort Junior School", "Nan Chiau Primary School", "Nan Hua Primary School", "Nanyang Primary School", "Naval Base Primary School", "New Town Primary School", "Ngee Ann Primary School", "North Spring Primary School", "North View Primary School", "North Vista Primary School", "Northland Primary School", "Northoaks Primary School", "Northshore Primary School", "Oasis Primary School", "Opera Estate Primary School", "Palm View Primary School", "Park View Primary School", "Pasir Ris Primary School", "Paya Lebar Methodist Girls' School (Primary)", "Pei Chun Public School", "Pei Hwa Presbyterian Primary School", "Pei Tong Primary School", "Peiying Primary School", "Pioneer Primary School", "Poi Ching School", "Princess Elizabeth Primary School", "Punggol Cove Primary School", "Punggol Green Primary School", "Punggol Primary School", "Punggol View Primary School", "Qifa Primary School", "Qihua Primary School", "Queenstown Primary School", "Radin Mas Primary School", "Raffles Girls' Primary School", "Red Swastika School", "River Valley Primary School", "Riverside Primary School", "Rivervale Primary School", "Rosyth School", "Rulang Primary School", "Sembawang Primary School", "Seng Kang Primary School", "Sengkang Green Primary School", "Shuqun Primary School", "Si Ling Primary School", "Singapore Chinese Girls' Primary School", "South View Primary School", "Springdale Primary School", "St. Andrew's Junior School", "St. Anthony's Canossian Primary School", "St. Anthony's Primary School", "St. Gabriel's Primary School", "St. Hilda's Primary School", "St. Joseph's Institution Junior", "St. Margaret's Primary School", "St. Stephen's School", "Stamford Primary School", "Tampines North Primary School", "Tampines Primary School", "Tanjong Katong Primary School", "Tao Nan School", "Teck Ghee Primary School", "Teck Whye Primary School", "Telok Kurau Primary School", "Temasek Primary School", "Townsville Primary School", "Unity Primary School", "Valour Primary School", "Waterway Primary School", "Wellington Primary School", "West Grove Primary School", "West Spring Primary School", "West View Primary School", "Westwood Primary School", "White Sands Primary School", "Woodgrove Primary School", "Woodlands Primary School", "Woodlands Ring Primary School", "Xinghua Primary School", "Xingnan Primary School", "Xinmin Primary School", "Xishan Primary School", "Yangzheng Primary School", "Yew Tee Primary School", "Yio Chu Kang Primary School", "Yishun Primary School", "Yu Neng Primary School", "Yuhua Primary School", "Yumin Primary School", "Zhangde Primary School", "Zhenghua Primary School", "Zhonghua Primary School"]
+  },
+  "map": {
+    "Admiralty Primary School": ["1"],
+    "Ahmad Ibrahim Primary School": ["2"],
+    "Ai Tong School": ["3"],
+    "Alexandra Primary School": ["4"],
+    "Anchor Green Primary School": ["5"],
+    "Anderson Primary School": ["6"],
+    "Ang Mo Kio Primary School": ["7"],
+    "Anglo-Chinese School (Junior)": ["8"],
+    "Anglo-Chinese School (Primary)": ["9"],
+    "Angsana Primary School": ["10"],
+    "Beacon Primary School": ["11"],
+    "Bedok Green Primary School": ["12"],
+    "Bendemeer Primary School": ["13"],
+    "Blangah Rise Primary School": ["14"],
+    "Boon Lay Garden Primary School": ["15"],
+    "Bukit Panjang Primary School": ["16"],
+    "Bukit Timah Primary School": ["17"],
+    "Bukit View Primary School": ["18"],
+    "Canberra Primary School": ["19"],
+    "Canossa Catholic Primary School": ["20"],
+    "Cantonment Primary School": ["21"],
+    "Casuarina Primary School": ["22"],
+    "Catholic High School": ["23"],
+    "Cedar Primary School": ["24"],
+    "Changkat Primary School": ["25"],
+    "Chij (Katong) Primary": ["26"],
+    "Chij (Kellock)": ["27"],
+    "Chij Our Lady Of Good Counsel": ["28"],
+    "Chij Our Lady Of The Nativity": ["29"],
+    "Chij Our Lady Queen Of Peace": ["30"],
+    "Chij Primary (Toa Payoh)": ["31"],
+    "Chij St. Nicholas Girls' School": ["32"],
+    "Chongfu School": ["33"],
+    "Chongzheng Primary School": ["34"],
+    "Chua Chu Kang Primary School": ["35"],
+    "Clementi Primary School": ["36"],
+    "Compassvale Primary School": ["37"],
+    "Concord Primary School": ["38"],
+    "Corporation Primary School": ["39"],
+    "Damai Primary School": ["40"],
+    "Dazhong Primary School": ["41"],
+    "De La Salle School": ["42"],
+    "East Spring Primary School": ["43"],
+    "Edgefield Primary School": ["44"],
+    "Elias Park Primary School": ["45"],
+    "Endeavour Primary School": ["46"],
+    "Eunos Primary School": ["47"],
+    "Evergreen Primary School": ["48"],
+    "Fairfield Methodist School (Primary)": ["49"],
+    "Farrer Park Primary School": ["50"],
+    "Fengshan Primary School": ["51"],
+    "Fern Green Primary School": ["52"],
+    "Fernvale Primary School": ["53"],
+    "First Toa Payoh Primary School": ["54"],
+    "Frontier Primary School": ["55"],
+    "Fuchun Primary School": ["56"],
+    "Fuhua Primary School": ["57"],
+    "Gan Eng Seng Primary School": ["58"],
+    "Geylang Methodist School (Primary)": ["59"],
+    "Gongshang Primary School": ["60"],
+    "Greendale Primary School": ["61"],
+    "Greenridge Primary School": ["62"],
+    "Greenwood Primary School": ["63"],
+    "Guangyang Primary School": ["64"],
+    "Haig Girls' School": ["65"],
+    "Henry Park Primary School": ["66"],
+    "Holy Innocents' Primary School": ["67"],
+    "Hong Wen School": ["68"],
+    "Horizon Primary School": ["69"],
+    "Hougang Primary School": ["70"],
+    "Huamin Primary School": ["71"],
+    "Innova Primary School": ["72"],
+    "Jiemin Primary School": ["73"],
+    "Jing Shan Primary School": ["74"],
+    "Junyuan Primary School": ["75"],
+    "Jurong Primary School": ["76"],
+    "Jurong West Primary School": ["77"],
+    "Juying Primary School": ["78"],
+    "Keming Primary School": ["79"],
+    "Kheng Cheng School": ["80"],
+    "Kong Hwa School": ["81"],
+    "Kranji Primary School": ["82"],
+    "Kuo Chuan Presbyterian Primary School": ["83"],
+    "Lakeside Primary School": ["84"],
+    "Lianhua Primary School": ["85"],
+    "Maha Bodhi School": ["86"],
+    "Maris Stella High School": ["87"],
+    "Marsiling Primary School": ["88"],
+    "Marymount Convent School": ["89"],
+    "Mayflower Primary School": ["90"],
+    "Mee Toh School": ["91"],
+    "Meridian Primary School": ["92"],
+    "Methodist Girls' School (Primary)": ["93"],
+    "Montfort Junior School": ["94"],
+    "Nan Chiau Primary School": ["95"],
+    "Nan Hua Primary School": ["96"],
+    "Nanyang Primary School": ["97"],
+    "Naval Base Primary School": ["98"],
+    "New Town Primary School": ["99"],
+    "Ngee Ann Primary School": ["100"],
+    "North Spring Primary School": ["101"],
+    "North View Primary School": ["102"],
+    "North Vista Primary School": ["103"],
+    "Northland Primary School": ["104"],
+    "Northoaks Primary School": ["105"],
+    "Northshore Primary School": ["106"],
+    "Oasis Primary School": ["107"],
+    "Opera Estate Primary School": ["108"],
+    "Palm View Primary School": ["109"],
+    "Park View Primary School": ["110"],
+    "Pasir Ris Primary School": ["111"],
+    "Paya Lebar Methodist Girls' School (Primary)": ["112"],
+    "Pei Chun Public School": ["113"],
+    "Pei Hwa Presbyterian Primary School": ["114"],
+    "Pei Tong Primary School": ["115"],
+    "Peiying Primary School": ["116"],
+    "Pioneer Primary School": ["117"],
+    "Poi Ching School": ["118"],
+    "Princess Elizabeth Primary School": ["119"],
+    "Punggol Cove Primary School": ["120"],
+    "Punggol Green Primary School": ["121"],
+    "Punggol Primary School": ["122"],
+    "Punggol View Primary School": ["123"],
+    "Qifa Primary School": ["124"],
+    "Qihua Primary School": ["125"],
+    "Queenstown Primary School": ["126"],
+    "Radin Mas Primary School": ["127"],
+    "Raffles Girls' Primary School": ["128"],
+    "Red Swastika School": ["129"],
+    "River Valley Primary School": ["130"],
+    "Riverside Primary School": ["131"],
+    "Rivervale Primary School": ["132"],
+    "Rosyth School": ["133"],
+    "Rulang Primary School": ["134"],
+    "Sembawang Primary School": ["135"],
+    "Seng Kang Primary School": ["136"],
+    "Sengkang Green Primary School": ["137"],
+    "Shuqun Primary School": ["138"],
+    "Si Ling Primary School": ["139"],
+    "Singapore Chinese Girls' Primary School": ["140"],
+    "South View Primary School": ["141"],
+    "Springdale Primary School": ["142"],
+    "St. Andrew's Junior School": ["143"],
+    "St. Anthony's Canossian Primary School": ["144"],
+    "St. Anthony's Primary School": ["145"],
+    "St. Gabriel's Primary School": ["146"],
+    "St. Hilda's Primary School": ["147"],
+    "St. Joseph's Institution Junior": ["148"],
+    "St. Margaret's Primary School": ["149"],
+    "St. Stephen's School": ["150"],
+    "Stamford Primary School": ["151"],
+    "Tampines North Primary School": ["152"],
+    "Tampines Primary School": ["153"],
+    "Tanjong Katong Primary School": ["154"],
+    "Tao Nan School": ["155"],
+    "Teck Ghee Primary School": ["156"],
+    "Teck Whye Primary School": ["157"],
+    "Telok Kurau Primary School": ["158"],
+    "Temasek Primary School": ["159"],
+    "Townsville Primary School": ["160"],
+    "Unity Primary School": ["161"],
+    "Valour Primary School": ["162"],
+    "Waterway Primary School": ["163"],
+    "Wellington Primary School": ["164"],
+    "West Grove Primary School": ["165"],
+    "West Spring Primary School": ["166"],
+    "West View Primary School": ["167"],
+    "Westwood Primary School": ["168"],
+    "White Sands Primary School": ["169"],
+    "Woodgrove Primary School": ["170"],
+    "Woodlands Primary School": ["171"],
+    "Woodlands Ring Primary School": ["172"],
+    "Xinghua Primary School": ["173"],
+    "Xingnan Primary School": ["174"],
+    "Xinmin Primary School": ["175"],
+    "Xishan Primary School": ["176"],
+    "Yangzheng Primary School": ["177"],
+    "Yew Tee Primary School": ["178"],
+    "Yio Chu Kang Primary School": ["179"],
+    "Yishun Primary School": ["180"],
+    "Yu Neng Primary School": ["181"],
+    "Yuhua Primary School": ["182"],
+    "Yumin Primary School": ["183"],
+    "Zhangde Primary School": ["184"],
+    "Zhenghua Primary School": ["185"],
+    "Zhonghua Primary School": ["186"]
+  },
+  "group": ["SharedDatac5b06c7f"]
+}</script>
+</div>
+</div>
+<div id="type" class="form-group crosstalk-input-checkboxgroup crosstalk-input">
+<label class="control-label" for="type">Zone</label>
+<div class="crosstalk-options-group">
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="East"/>
+<span>East</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="North"/>
+<span>North</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="South"/>
+<span>South</span>
+</label>
+</div>
+<div class="checkbox">
+<label>
+<input type="checkbox" name="type" value="West"/>
+<span>West</span>
+</label>
+</div>
+</div>
+<script type="application/json" data-for="type">{
+  "map": {
+    "East": ["10", "12", "20", "22", "25", "26", "34", "40", "43", "45", "47", "51", "52", "59", "60", "65", "75", "81", "86", "92", "100", "106", "107", "108", "110", "111", "112", "118", "120", "121", "123", "129", "137", "142", "144", "147", "150", "152", "153", "154", "155", "158", "159", "162", "163", "169", "181", "183"],
+    "North": ["1", "2", "5", "6", "19", "23", "32", "33", "37", "44", "46", "48", "53", "56", "61", "63", "69", "70", "71", "72", "73", "87", "88", "91", "94", "95", "98", "101", "102", "103", "104", "105", "109", "116", "125", "131", "132", "133", "135", "136", "139", "140", "164", "170", "171", "172", "175", "176", "179", "180"],
+    "South": ["3", "4", "7", "8", "9", "13", "14", "21", "24", "27", "28", "29", "31", "49", "50", "54", "58", "64", "67", "68", "74", "80", "83", "89", "90", "99", "113", "115", "122", "126", "127", "128", "130", "143", "146", "148", "149", "151", "156", "160", "173", "177", "184", "186"],
+    "West": ["11", "15", "16", "17", "18", "30", "35", "36", "38", "39", "41", "42", "55", "57", "62", "66", "76", "77", "78", "79", "82", "84", "85", "93", "96", "97", "114", "117", "119", "124", "134", "138", "141", "145", "157", "161", "165", "166", "167", "168", "174", "178", "182", "185"]
+  },
+  "group": ["SharedDatac5b06c7f"]
+}</script>
+</div>
+<div id="type" class="form-group crosstalk-input-select crosstalk-input">
+<label class="control-label" for="type">Urban area</label>
+<div>
+<select multiple></select>
+<script type="application/json" data-for="type">{
+  "items": {
+    "value": ["Ang Mo Kio", "Bedok", "Bishan", "Bukit Batok", "Bukit Merah", "Bukit Panjang", "Bukit Timah", "Central", "Choa Chu Kang", "Clementi", "Geylang", "Hougang", "Jurong East", "Jurong West", "Kallang", "Marine Parade", "Novena", "Pasir Ris", "Punggol", "Queenstown", "Sembawang", "Seng Kang", "Serangoon", "Tampines", "Toa Payoh", "Woodlands", "Yishun"],
+    "label": ["Ang Mo Kio", "Bedok", "Bishan", "Bukit Batok", "Bukit Merah", "Bukit Panjang", "Bukit Timah", "Central", "Choa Chu Kang", "Clementi", "Geylang", "Hougang", "Jurong East", "Jurong West", "Kallang", "Marine Parade", "Novena", "Pasir Ris", "Punggol", "Queenstown", "Sembawang", "Seng Kang", "Serangoon", "Tampines", "Toa Payoh", "Woodlands", "Yishun"]
+  },
+  "map": {
+    "Ang Mo Kio": ["6", "7", "32", "74", "90", "156", "160"],
+    "Bedok": ["12", "26", "40", "51", "108", "129", "144", "150", "158", "159", "181"],
+    "Bishan": ["3", "23", "64", "83"],
+    "Bukit Batok": ["18", "41", "79", "85", "119", "145"],
+    "Bukit Merah": ["4", "14", "21", "27", "58", "127", "184"],
+    "Bukit Panjang": ["11", "16", "30", "62", "166", "167", "185"],
+    "Bukit Timah": ["17", "66", "93", "97", "114", "128"],
+    "Central": ["8", "130", "149", "151"],
+    "Choa Chu Kang": ["35", "38", "42", "82", "141", "157", "161", "178"],
+    "Clementi": ["36", "96", "115", "124"],
+    "Geylang": ["20", "47", "59", "65", "81", "86"],
+    "Hougang": ["29", "67", "70", "94", "112", "122", "173", "175", "179"],
+    "Jurong East": ["57", "76", "182"],
+    "Jurong West": ["15", "39", "55", "77", "78", "84", "117", "134", "138", "165", "168", "174"],
+    "Kallang": ["13", "50", "68"],
+    "Marine Parade": ["100", "154", "155"],
+    "Novena": ["9", "140", "148"],
+    "Pasir Ris": ["22", "45", "92", "110", "111", "169"],
+    "Punggol": ["44", "61", "69", "91", "106", "107", "120", "121", "123", "162", "163"],
+    "Queenstown": ["49", "99", "126"],
+    "Sembawang": ["19", "46", "105", "135", "164"],
+    "Seng Kang": ["5", "37", "52", "53", "95", "101", "103", "109", "132", "136", "137", "142"],
+    "Serangoon": ["28", "133", "146", "177", "186"],
+    "Tampines": ["10", "25", "34", "43", "60", "75", "118", "147", "152", "153", "183"],
+    "Toa Payoh": ["24", "31", "54", "80", "87", "89", "113", "143"],
+    "Woodlands": ["1", "48", "56", "63", "72", "88", "125", "131", "139", "170", "171", "172"],
+    "Yishun": ["2", "33", "71", "73", "98", "102", "104", "116", "176", "180"]
+  },
+  "group": ["SharedDatac5b06c7f"]
+}</script>
+</div>
+</div>
+</div>
+<div class="col-xs-10">
+<div id="htmlwidget-1" class="reactable html-widget" style="width:auto;height:auto;"></div>
+<script type="application/json" data-for="htmlwidget-1">{"x":{"tag":{"name":"Reactable","attribs":{"data":{".cluster":["7","1","5","1","1","1","1","2","2","1","1","1","1","1","1","1","1","1","6","4","1","3","5","1","1","2","2","2","2","2","2","2","1","1","1","1","1","1","1","1","1","1","1","1","3","6","4","7","1","1","1","1","1","1","1","7","1","1","4","1","1","1","7","5","4","5","2","1","1","1","1","7","1","1","1","1","1","1","1","1","4","1","5","1","1","4","2","7","2","1","1","3","2","2","1","5","5","1","1","1","1","1","1","1","6","1","1","1","1","3","3","2","1","5","1","1","1","1","1","1","1","1","1","1","7","1","1","5","1","1","7","1","5","1","6","1","1","1","7","2","1","1","2","2","1","2","5","2","2","2","1","1","1","1","5","1","1","1","1","1","1","1","1","6","1","1","1","1","3","7","7","7","1","1","1","1","1","1","1","1","1","1","1","1","1","1"],"school_name":["Admiralty Primary School","Ahmad Ibrahim Primary School","Ai Tong School","Alexandra Primary School","Anchor Green Primary School","Anderson Primary School","Ang Mo Kio Primary School","Anglo-Chinese School (Junior)","Anglo-Chinese School (Primary)","Angsana Primary School","Beacon Primary School","Bedok Green Primary School","Bendemeer Primary School","Blangah Rise Primary School","Boon Lay Garden Primary School","Bukit Panjang Primary School","Bukit Timah Primary School","Bukit View Primary School","Canberra Primary School","Canossa Catholic Primary School","Cantonment Primary School","Casuarina Primary School","Catholic High School","Cedar Primary School","Changkat Primary School","Chij (Katong) Primary","Chij (Kellock)","Chij Our Lady Of Good Counsel","Chij Our Lady Of The Nativity","Chij Our Lady Queen Of Peace","Chij Primary (Toa Payoh)","Chij St. Nicholas Girls' School","Chongfu School","Chongzheng Primary School","Chua Chu Kang Primary School","Clementi Primary School","Compassvale Primary School","Concord Primary School","Corporation Primary School","Damai Primary School","Dazhong Primary School","De La Salle School","East Spring Primary School","Edgefield Primary School","Elias Park Primary School","Endeavour Primary School","Eunos Primary School","Evergreen Primary School","Fairfield Methodist School (Primary)","Farrer Park Primary School","Fengshan Primary School","Fern Green Primary School","Fernvale Primary School","First Toa Payoh Primary School","Frontier Primary School","Fuchun Primary School","Fuhua Primary School","Gan Eng Seng Primary School","Geylang Methodist School (Primary)","Gongshang Primary School","Greendale Primary School","Greenridge Primary School","Greenwood Primary School","Guangyang Primary School","Haig Girls' School","Henry Park Primary School","Holy Innocents' Primary School","Hong Wen School","Horizon Primary School","Hougang Primary School","Huamin Primary School","Innova Primary School","Jiemin Primary School","Jing Shan Primary School","Junyuan Primary School","Jurong Primary School","Jurong West Primary School","Juying Primary School","Keming Primary School","Kheng Cheng School","Kong Hwa School","Kranji Primary School","Kuo Chuan Presbyterian Primary School","Lakeside Primary School","Lianhua Primary School","Maha Bodhi School","Maris Stella High School","Marsiling Primary School","Marymount Convent School","Mayflower Primary School","Mee Toh School","Meridian Primary School","Methodist Girls' School (Primary)","Montfort Junior School","Nan Chiau Primary School","Nan Hua Primary School","Nanyang Primary School","Naval Base Primary School","New Town Primary School","Ngee Ann Primary School","North Spring Primary School","North View Primary School","North Vista Primary School","Northland Primary School","Northoaks Primary School","Northshore Primary School","Oasis Primary School","Opera Estate Primary School","Palm View Primary School","Park View Primary School","Pasir Ris Primary School","Paya Lebar Methodist Girls' School (Primary)","Pei Chun Public School","Pei Hwa Presbyterian Primary School","Pei Tong Primary School","Peiying Primary School","Pioneer Primary School","Poi Ching School","Princess Elizabeth Primary School","Punggol Cove Primary School","Punggol Green Primary School","Punggol Primary School","Punggol View Primary School","Qifa Primary School","Qihua Primary School","Queenstown Primary School","Radin Mas Primary School","Raffles Girls' Primary School","Red Swastika School","River Valley Primary School","Riverside Primary School","Rivervale Primary School","Rosyth School","Rulang Primary School","Sembawang Primary School","Seng Kang Primary School","Sengkang Green Primary School","Shuqun Primary School","Si Ling Primary School","Singapore Chinese Girls' Primary School","South View Primary School","Springdale Primary School","St. Andrew's Junior School","St. Anthony's Canossian Primary School","St. Anthony's Primary School","St. Gabriel's Primary School","St. Hilda's Primary School","St. Joseph's Institution Junior","St. Margaret's Primary School","St. Stephen's School","Stamford Primary School","Tampines North Primary School","Tampines Primary School","Tanjong Katong Primary School","Tao Nan School","Teck Ghee Primary School","Teck Whye Primary School","Telok Kurau Primary School","Temasek Primary School","Townsville Primary School","Unity Primary School","Valour Primary School","Waterway Primary School","Wellington Primary School","West Grove Primary School","West Spring Primary School","West View Primary School","Westwood Primary School","White Sands Primary School","Woodgrove Primary School","Woodlands Primary School","Woodlands Ring Primary School","Xinghua Primary School","Xingnan Primary School","Xinmin Primary School","Xishan Primary School","Yangzheng Primary School","Yew Tee Primary School","Yio Chu Kang Primary School","Yishun Primary School","Yu Neng Primary School","Yuhua Primary School","Yumin Primary School","Zhangde Primary School","Zhenghua Primary School","Zhonghua Primary School"],"zone_code":["North","North","South","South","North","North","South","South","South","East","West","East","South","South","West","West","West","West","North","East","South","East","North","South","East","East","South","South","South","West","South","North","North","East","West","West","North","West","West","East","West","West","East","North","East","North","East","North","South","South","East","East","North","South","West","North","West","South","East","East","North","West","North","South","East","West","South","South","North","North","North","North","North","South","East","West","West","West","West","South","East","West","South","West","West","East","North","North","South","South","North","East","West","North","North","West","West","North","South","East","North","North","North","North","North","East","East","East","North","East","East","East","South","West","South","North","West","East","West","East","East","South","East","West","North","South","South","South","East","South","North","North","North","West","North","North","East","West","North","North","West","East","South","East","West","South","East","South","South","East","South","East","East","East","East","South","West","East","East","South","West","East","East","North","West","West","West","West","East","North","North","North","South","West","North","North","South","West","North","North","East","West","East","South","West","South"],"dgp_code":["Woodlands","Yishun","Bishan","Bukit Merah","Seng Kang","Ang Mo Kio","Ang Mo Kio","Central","Novena","Tampines","Bukit Panjang","Bedok","Kallang","Bukit Merah","Jurong West","Bukit Panjang","Bukit Timah","Bukit Batok","Sembawang","Geylang","Bukit Merah","Pasir Ris","Bishan","Toa Payoh","Tampines","Bedok","Bukit Merah","Serangoon","Hougang","Bukit Panjang","Toa Payoh","Ang Mo Kio","Yishun","Tampines","Choa Chu Kang","Clementi","Seng Kang","Choa Chu Kang","Jurong West","Bedok","Bukit Batok","Choa Chu Kang","Tampines","Punggol","Pasir Ris","Sembawang","Geylang","Woodlands","Queenstown","Kallang","Bedok","Seng Kang","Seng Kang","Toa Payoh","Jurong West","Woodlands","Jurong East","Bukit Merah","Geylang","Tampines","Punggol","Bukit Panjang","Woodlands","Bishan","Geylang","Bukit Timah","Hougang","Kallang","Punggol","Hougang","Yishun","Woodlands","Yishun","Ang Mo Kio","Tampines","Jurong East","Jurong West","Jurong West","Bukit Batok","Toa Payoh","Geylang","Choa Chu Kang","Bishan","Jurong West","Bukit Batok","Geylang","Toa Payoh","Woodlands","Toa Payoh","Ang Mo Kio","Punggol","Pasir Ris","Bukit Timah","Hougang","Seng Kang","Clementi","Bukit Timah","Yishun","Queenstown","Marine Parade","Seng Kang","Yishun","Seng Kang","Yishun","Sembawang","Punggol","Punggol","Bedok","Seng Kang","Pasir Ris","Pasir Ris","Hougang","Toa Payoh","Bukit Timah","Clementi","Yishun","Jurong West","Tampines","Bukit Batok","Punggol","Punggol","Hougang","Punggol","Clementi","Woodlands","Queenstown","Bukit Merah","Bukit Timah","Bedok","Central","Woodlands","Seng Kang","Serangoon","Jurong West","Sembawang","Seng Kang","Seng Kang","Jurong West","Woodlands","Novena","Choa Chu Kang","Seng Kang","Toa Payoh","Bedok","Bukit Batok","Serangoon","Tampines","Novena","Central","Bedok","Central","Tampines","Tampines","Marine Parade","Marine Parade","Ang Mo Kio","Choa Chu Kang","Bedok","Bedok","Ang Mo Kio","Choa Chu Kang","Punggol","Punggol","Sembawang","Jurong West","Bukit Panjang","Bukit Panjang","Jurong West","Pasir Ris","Woodlands","Woodlands","Woodlands","Hougang","Jurong West","Hougang","Yishun","Serangoon","Choa Chu Kang","Hougang","Yishun","Bedok","Jurong East","Tampines","Bukit Merah","Bukit Panjang","Serangoon"],"nature_code":["Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Boys' School","Boys' School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Boys' School","Co-Ed School","Co-Ed School","Girls' School","Girls' School","Girls' School","Girls' School","Girls' School","Girls' School","Girls' School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Girls' School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Boys' School","Co-Ed School","Girls' School","Co-Ed School","Co-Ed School","Co-Ed School","Girls' School","Boys' School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Girls' School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Girls' School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Girls' School","Co-Ed School","Co-Ed School","Boys' School","Girls' School","Co-Ed School","Boys' School","Co-Ed School","Boys' School","Girls' School","Boys' School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School","Co-Ed School"],"gifted_ind":["No","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","No","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No"],"sap_ind":["No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","Yes","No","No","No","No","No","No","No","No","No","No","No","No","Yes","No","No","No","No","Yes","Yes","No","No","No","No","No","No","No","No","Yes","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","Yes","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","Yes","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No","No"],"affiliated":[0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,1,0,0,0,1,0,1,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"pop_decile":[8,1,10,4,5,9,3,10,10,1,1,3,4,3,2,8,1,1,8,5,1,3,10,2,3,6,6,6,7,5,9,10,9,9,6,4,5,5,3,4,5,7,2,3,4,3,3,5,9,3,7,7,4,1,9,5,4,1,5,10,1,3,2,1,5,10,9,7,7,6,6,7,6,5,6,8,6,1,7,4,9,3,9,4,1,8,8,2,3,3,7,1,10,5,8,10,10,4,1,7,1,4,2,8,2,1,7,5,2,2,9,8,10,10,4,4,2,7,8,6,8,5,8,8,4,3,10,7,9,9,8,5,10,10,3,2,9,9,3,9,9,6,7,4,8,6,10,8,7,6,2,3,6,6,10,6,2,2,10,2,2,1,7,6,5,8,2,9,7,6,6,2,2,5,8,4,7,4,1,5,9,3,4,4,5,1],"bus_count":[3,6,3,5,3,3,6,11,6,10,7,7,16,2,8,2,1,10,1,11,3,3,8,13,3,15,4,3,9,10,3,4,1,11,4,"NA",5,2,2,7,2,2,3,6,10,2,12,3,5,1,12,2,6,5,3,11,18,7,3,9,5,3,3,13,2,7,8,15,5,10,2,2,5,1,22,1,1,2,8,8,4,2,4,4,1,17,4,3,2,8,3,2,13,5,5,9,17,1,10,14,8,4,"NA",2,1,2,2,1,9,5,4,5,2,7,3,5,1,4,5,2,"NA",6,2,6,2,4,4,12,9,8,2,2,3,1,4,14,6,3,1,15,1,4,11,1,1,3,1,11,9,11,14,3,9,"NA",10,7,3,9,7,14,1,"NA",2,3,2,2,5,3,8,1,2,1,5,2,4,8,4,1,6,2,8,6,"NA",14,6,13],"station_count":[1,1,1,2,2,1,1,1,1,2,2,2,2,3,2,2,3,1,1,1,2,1,1,1,1,2,1,3,1,2,1,2,1,1,1,1,1,1,2,2,1,1,1,1,1,1,1,1,2,1,1,1,2,2,1,1,1,1,1,3,2,2,1,1,2,2,1,1,3,5,1,1,1,1,4,2,1,1,1,1,1,1,1,1,2,2,1,1,2,1,1,1,1,1,1,1,1,1,1,"NA",2,2,2,1,1,2,1,2,1,1,1,2,2,1,1,1,1,1,1,1,1,2,1,1,1,1,2,1,2,1,1,1,2,1,1,1,2,1,1,1,1,2,2,1,1,1,2,1,1,1,2,1,1,"NA",2,2,1,1,1,2,1,"NA",1,1,1,1,2,1,1,1,1,1,1,1,"NA",1,1,1,2,1,3,2,1,1,1,3]},"columns":[{"accessor":".cluster","name":".cluster","type":"factor","headerStyle":{"background":"#00AFBB"}},{"accessor":"school_name","name":"school_name","type":"character","headerStyle":{"background":"#00AFBB"}},{"accessor":"zone_code","name":"zone_code","type":"character","headerStyle":{"background":"#00AFBB"}},{"accessor":"dgp_code","name":"dgp_code","type":"character","headerStyle":{"background":"#00AFBB"}},{"accessor":"nature_code","name":"nature_code","type":"character","headerStyle":{"background":"#00AFBB"}},{"accessor":"gifted_ind","name":"gifted_ind","type":"character","headerStyle":{"background":"#00AFBB"}},{"accessor":"sap_ind","name":"sap_ind","type":"character","headerStyle":{"background":"#00AFBB"}},{"accessor":"affiliated","name":"affiliated","type":"numeric","headerStyle":{"background":"#00AFBB"}},{"accessor":"pop_decile","name":"pop_decile","type":"numeric","headerStyle":{"background":"#00AFBB"}},{"accessor":"bus_count","name":"bus_count","type":"numeric","headerStyle":{"background":"#00AFBB"}},{"accessor":"station_count","name":"station_count","type":"numeric","headerStyle":{"background":"#00AFBB"}}],"filterable":true,"defaultPageSize":10,"showPageSizeOptions":true,"pageSizeOptions":[5,10,20],"paginationType":"simple","showPageInfo":true,"minRows":5,"highlight":true,"striped":true,"theme":{"borderColor":"#dfe2e5","stripedColor":"#f6f8fa","highlightColor":"#f0f5f9","cellPadding":"8px 12px","style":{"fontFamily":"Helvetica"},"searchInputStyle":{"width":"100%"}},"crosstalkKey":["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47","48","49","50","51","52","53","54","55","56","57","58","59","60","61","62","63","64","65","66","67","68","69","70","71","72","73","74","75","76","77","78","79","80","81","82","83","84","85","86","87","88","89","90","91","92","93","94","95","96","97","98","99","100","101","102","103","104","105","106","107","108","109","110","111","112","113","114","115","116","117","118","119","120","121","122","123","124","125","126","127","128","129","130","131","132","133","134","135","136","137","138","139","140","141","142","143","144","145","146","147","148","149","150","151","152","153","154","155","156","157","158","159","160","161","162","163","164","165","166","167","168","169","170","171","172","173","174","175","176","177","178","179","180","181","182","183","184","185","186"],"crosstalkGroup":"SharedDatac5b06c7f","dataKey":"ff38839315f1672efff87a550f4535be","key":"ff38839315f1672efff87a550f4535be"},"children":[]},"class":"reactR_markup"},"evals":[],"jsHooks":[]}</script>
+</div>
+</div>
+</div>
+</div>
+<div id="conclusion" class="section level1">
+<h1>Conclusion</h1>
+<p>It was interesting to see the partitions created by k-means, and visualizing the various dimensions via waffle plots. However, as the number of features expand, performance of k-means tends to break down and the approach loses its effectiveness.</p>
+<p>A solution I’ve learnt recently is <a href="https://developers.google.com/machine-learning/clustering/algorithm/advantages-disadvantages#:~:text=Spectral%20clustering%20avoids%20the%20curse%20of%20dimensionality%20by%20adding%20a%20pre-clustering%20step%20to%20your%20algorithm%3A">spectral clustering</a>, a pre-processing step that utilizes dimension reduction techniques such as PCA, followed by the clustering algorithm of your choice.</p>
+</div>
