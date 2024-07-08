@@ -14,6 +14,7 @@ format:
       dark: darkly
     smooth-scroll: true
     embed-resources: true
+    page-layout: full
 categories: []
 tags:
 - r
@@ -73,7 +74,7 @@ Fixed income analysts regularly use the Bloomberg's SRCH <GO> screen to conduct 
 # Importing Data  
 
 This bond-related data is extracted from Bloomberg's SRCH. Subsequently, I learnt that Bloomberg prevented said data to be downloaded - which makes me wonder if my usage of this data prompted an internal review?  
-In any case, I'm attempting to use BQL (Bloomberg Query Language) to extract similar data in future. For now, the data is available at my [github](https://github.com/DesmondChoy/glaciers/tree/master/content/post).  
+In any case, I'm attempting to use BQL (Bloomberg Query Language) to extract similar data in future. For now, the data is available at my [github](https://github.com/DesmondChoy/r_projects/tree/main/source/data).  
 
 ```{r Importing}
 Sectors <- read_xlsx(here("source", "data", "Sectors.xlsx"),

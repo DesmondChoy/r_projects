@@ -2,15 +2,28 @@
 title: Spotify Data? That's Music To My Ears!
 author: Desmond Choy
 date: '2020-01-21'
-slug: spotify-data-thats-music-to-my-ears
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    number-sections: true
+    number-depth: 2
+    theme: 
+      light: lumen
+      dark: darkly
+    smooth-scroll: true
+    embed-resources: true
+    page-layout: full
+code-links:
+  text: Home
+  href: index.html
 categories: []
 tags:
   - r
   - EDA
   - visualization
   - tidytuesday
-keywords:
-  - tech
 editor_options: 
   chunk_output_type: console
 ---
@@ -22,6 +35,8 @@ knitr::opts_chunk$set(
   fig.width = 15,
   fig.height = 12)
 ```
+
+# Import libaries & data
 
 ```{r Libraries, warning=FALSE, message=FALSE, echo=FALSE}
 library(tidyverse)
@@ -43,6 +58,8 @@ spotify_songs <-
 skimr::skim(spotify_songs)
 ```
 
+# Adding labels: Decades
+
 A lot of interesting labels are associated with the data, some of which include *danceability*, *instrumentalness* and *valence*. Full definitions can be found in the associated [data dictionary](https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-01-21/readme.md).
 
 I proceed to wrangle the data by adding my own labels to indicate the decades in which the track/album appears in.
@@ -59,6 +76,8 @@ spotify$decades <- cut(
   labels = c("50s", "60s", "70s", "80s", "90s", "2000s", "2010s")
 )
 ```
+
+# Popularity of Genres Through The Decades
 
 Using track popularity as a gauge, how have subgenres evolved over the decades?  
 
@@ -111,6 +130,8 @@ spotify %>%
 
 How about some suggestions to danceable EDM tracks that I could listen to when out for a run?  
 
+# Most danceable EDM tracks
+
 We filter by Danceability, as defined as *how suitable a track is for dancing based on a combination of musical elements including tempo, rhythm stability, beat strength, and overall regularity. A value of 0.0 is least danceable and 1.0 is most danceable.*
 
 ```{r}
@@ -148,6 +169,8 @@ spotify %>%
   guides(row = guide_legend(nrow = 1))
   
 ```
+
+# Curating my sub-genres
 
 Finally, how about some curated suggestions - Based on the criteria listed below, what are some suggestions for sub-genres?  
 
