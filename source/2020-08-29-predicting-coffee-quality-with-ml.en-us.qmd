@@ -2,22 +2,33 @@
 title: Predicting Coffee Quality With ML
 author: Desmond Choy
 date: '2020-08-29'
-slug: predicting-coffee-quality-with-ml.en-us
-summary: Coffee quality-related data is explored and cleaned. Using the tidymodels framework, I demonstrate feature engineering, fitting of three models (LASSO, Random Forest and XGBoost), tuning of hyperparameters and analyzing out-of-sample performance.
-readingtime: '16'
+format:
+  html:
+    toc: true
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    theme: 
+      light: flatly
+      dark: darkly
+    smooth-scroll: true
+    embed-resources: true
+    page-layout: full
+    other-links:
+      - text: Home
+        icon: house
+        href: index.html
+      - text: GitHub
+        icon: github
+        href: https://github.com/DesmondChoy
 tags:
   - EDA
   - machine learning
   - r
   - tidytuesday
   - visualization
-coverImage: https://images.unsplash.com/photo-1492158244976-29b84ba93025?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=967&q=80
-thumbnailImage: https://images.unsplash.com/photo-1497515114629-f71d768fd07c?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=1062&q=80
-thumbnailImagePosition: left
-coverCaption: Coffee By Cyril Saulnier
-output:
-  blogdown::html_page:
-    toc: true
+editor_options: 
+  chunk_output_type: console
 ---
 
 # Coffee Quality Ratings
@@ -37,7 +48,7 @@ knitr::opts_chunk$set(
   fig.height = 10)
 ```
 
-# Libraries
+# Import libaries & data
 
 ```{r libraries}
 library(tidyverse)
@@ -46,8 +57,6 @@ library(tidymodels)
 theme_set(theme_minimal())
 ```
 
-# Exploratory Data Analysis
-
 ```{r reading data}
 coffee <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-07-07/coffee_ratings.csv')
 
@@ -55,6 +64,8 @@ dim(coffee)
 ```
 
 While not *big data*, this data set has over 1.3k rows and 43 columns! This is the [data dictionary](https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-07-07/readme.md), and full descriptions and examples can be [found here](https://database.coffeeinstitute.org/coffee/357789/grade).   
+
+# Exploratory Data Analysis
 
 ## Distribution of total_cup_points
 
@@ -68,7 +79,7 @@ coffee %>%
     x = "Total_cup_points",
     y = "Count",
     title = "Analyzing Distribution of Coffee Quality Points: Histogram",
-    subtitle = "Majority of scores are clustered between 80-90,\nwith somesignificant outliers - potentially data errors",
+    subtitle = "Majority of scores are clustered between 80-90,\nwith some significant outliers - potentially data errors",
     caption = "Source: Coffee Quality Database"
   ) +
   theme(
@@ -151,7 +162,7 @@ coffee %>%
   mutate(sum = sum(across(aroma:cupper_points))) %>% 
   select(id, total_cup_points, sum) %>% 
   ungroup() %>% 
-  slice_sample(1:length(id), n = 5)
+  slice_sample(n = 5)
 ```
 
 ## Correlation of total_cup_points
@@ -193,7 +204,7 @@ set.seed(123)
 
 coffee %>% 
   select(altitude, altitude_mean_meters) %>% 
-  slice_sample(1:length(altitude), n = 20)
+  slice_sample(n = 20)
 ```
 
 It looks like `altitude_mean_meters` is a clean version of `altitude` - so I'll focus on using ``altitude_mean_meters` for now. 
@@ -375,7 +386,7 @@ coffee_refined %>%
   filter(sum(is.na(variety)) > 10) %>% 
   ungroup() %>% 
   ggplot(aes(total_cup_points, meters, colour = is.na(variety))) +
-  geom_point(size = 1.5) +
+  geom_point(size = 2, alpha = 0.5) +
   scale_colour_fish_d(option = "Etheostoma_spectabile") +
   facet_wrap(~ country_of_origin) +
   labs(
@@ -462,7 +473,7 @@ Importantly, you might have realized I have chosen **not** to include columns `a
 
 Thus, the intention was that by excluding these columns, I wanted to make it more  challenging for the models to predict the outcome - somewhat akin to the complexity faced in real-life predictive modeling.
 
-# Modeling
+# Data preparation
 
 The objective is to run three models: LASSO, Random Forest and XGboost, and compare performance in predicting `total_cup_points`.
 
@@ -485,7 +496,7 @@ set.seed(2020)
 folds <- vfold_cv(coffee_train, v = 10)
 ```
 
-# LASSO Model
+# Start with LASSO Model
 
 ## Model Specification
 
@@ -513,7 +524,7 @@ Here we specify the recipe:
 
 * `step_other`: Collapse factors into "other" if they don't meet a predefined threshold
 * `step_dummy`: Turns nominal (character/factor) columns into numeric binary data. Necessary because the LASSO can only process numeric data
-* `step_knnimpute`: Imputes the remainder of missing values using knn (default is 5). Here, after imputing missing values of `meters`, I used it to impute missing values of `variety`, and subsequently used both for imputing missing values of `processing_method`
+* `step_impute_knn`: Imputes the remainder of missing values using knn (default is 5). Here, after imputing missing values of `meters`, I used it to impute missing values of `variety`, and subsequently used both for imputing missing values of `processing_method`
 * `step_normalize`: Normalizes numeric data to have a standard deviation of one and a mean of zero. Necessary since the LASSO is sensitive to outliers
 
 ```{r coffee preprocessing}
@@ -529,22 +540,23 @@ coffee_rec <- coffee_train %>%
     threshold = 0.02,
     other = "uncommon"
   ) %>%
+  step_unknown(country_of_origin, new_level = "unknown_country") %>% 
   step_dummy(all_nominal(), -variety, -processing_method) %>%
-  step_knnimpute(meters,
+  step_impute_knn(meters,
                  impute_with = imp_vars(contains(c(
                    "country", "certification"
                  )))) %>%
-  step_knnimpute(variety,
+  step_impute_knn(variety,
                  impute_with = imp_vars(contains(c(
                    "country", "certification", "meters"
                  )))) %>%
-  step_knnimpute(processing_method,
+  step_impute_knn(processing_method,
                  impute_with = imp_vars(contains(
                    c("country", "certification", "meters", "variety")
                  ))) %>%
   step_dummy(variety, processing_method) %>%
   step_normalize(all_numeric(), -all_outcomes()) %>%
-  step_knnimpute(all_predictors())
+  step_impute_knn(all_predictors())
 ```
 
 `prep()` estimates the required parameters from the training set, and `juice()` applies these parameters on the training data and returns us the data in a tibble. The code below indicates that there are no more missing values after our pre-processing.
@@ -590,7 +602,9 @@ lasso_res <- tune_grid(
   resamples = folds,
   grid = lasso_grid,
   control = control_grid(save_pred = TRUE)
-  )
+)
+
+lasso_res
 ```
 
 ## Training Performance Assessment
@@ -602,7 +616,9 @@ the best tuned hyperparameters associated with the lowest in-sample RMSE can be 
 lasso_res %>%
   collect_metrics() %>%
   ggplot(aes(penalty, mean)) +
-  geom_line(aes(color = .metric), size = 1.5, show.legend = FALSE) +
+  geom_line(aes(color = .metric),
+            linewidth = 1.5,
+            show.legend = FALSE) +
   facet_wrap(. ~ .metric, nrow = 2) +
   scale_x_log10(label = scales::number_format()) +
   labs(
@@ -617,9 +633,11 @@ lasso_res %>%
     strip.background = element_blank(),
     strip.text = element_text(face = "bold", size = 15),
   ) 
+```
 
+```{r}
 lasso_res %>% 
-  show_best("rmse")
+  show_best(metric="rmse")
 ```
 
 ## Finalizing Hyperparameters
@@ -627,14 +645,18 @@ lasso_res %>%
 Let's use `select_best()` to obtain the optimal penalty hyperparameters that minimizes RMSE, and `finalize_workflow()` is used to fit the optimal hyperparameters to the LASSO model and the training data.
 
 ```{r lasso finalize workflow}
-lasso_best <- lasso_res %>% 
-  select_best("rmse")
+lasso_best <- lasso_res %>%
+  select_best(metric = "rmse")
 
-lasso_final_wf <- lasso_wf %>% 
+lasso_best
+
+lasso_final_wf <- lasso_wf %>%
   finalize_workflow(lasso_best)
+
+lasso_final_wf
 ```
 
-# Random Forest & XGBoost Models
+# Try Random Forest & XGBoost Models
 
 Just like what was done for the LASSO model, the random forest & XGBoost models can be specificed the same way. The process is also similar when creating respective workflows, tuning hyperparameters, selecting the hyperparameters that corresponds to the lowest RMSE, and finalizing the workflow.
 
@@ -643,18 +665,24 @@ Just like what was done for the LASSO model, the random forest & XGBoost models 
 Let's set `trees = 1000` for both random forest and XGBoost, and tune the remaining hyperparameters.
 
 ```{r rf xgb model spec}
-model_rf <- rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
-  set_engine("ranger", importance = "permutation") %>% 
+model_rf <- rand_forest(mtry = tune(),
+                        min_n = tune(),
+                        trees = 1000) %>%
+  set_engine("ranger", importance = "permutation") %>%
   set_mode("regression")
 
 model_xgboost <- boost_tree(
   trees = 1000,
   #model complexity
-  tree_depth = tune(), min_n = tune(), loss_reduction = tune(),
+  tree_depth = tune(),
+  min_n = tune(),
+  loss_reduction = tune(),
   #randomness
-  sample_size = tune(), mtry = tune(),
+  sample_size = tune(),
+  mtry = tune(),
   #step size
-  learn_rate = tune()) %>%
+  learn_rate = tune()
+) %>%
   set_engine("xgboost") %>%
   set_mode("regression")
 ```
@@ -682,8 +710,7 @@ For the XGBoost model, however, we are using a space-filling [latin hypercube](h
 
 ```{r rf xgb grid}
 set.seed(2020)
-rf_grid <- grid_random(finalize(mtry(), coffee_train),
-                       min_n(), size = 50) 
+rf_grid <- grid_random(finalize(mtry(), coffee_train), min_n(), size = 50)
 
 set.seed(2020)
 xgb_grid <- grid_latin_hypercube(
@@ -711,7 +738,7 @@ rf_res <- tune_grid(
   resamples = folds,
   grid = rf_grid,
   control = control_grid(save_pred = TRUE)
-  )
+)
 
 set.seed(2020)
 xgb_res <- tune_grid(
@@ -719,7 +746,7 @@ xgb_res <- tune_grid(
   resamples = folds,
   grid = xgb_grid,
   control = control_grid(save_pred = TRUE)
-  )
+)
 ```
 
 ## Training Performance Assessment
@@ -729,26 +756,28 @@ We can also visually assess the performance across all tuned hyperparameters and
 ```{r rf show best viz}
 rf_res %>%
   collect_metrics() %>%
-  filter(.metric == "rmse") %>% 
-  pivot_longer(mtry:min_n, 
-               names_to = "parameter",
-               values_to = "value") %>% 
+  filter(.metric == "rmse") %>%
+  pivot_longer(mtry:min_n, names_to = "parameter", values_to = "value") %>%
   ggplot(aes(value, mean)) +
-  geom_point(aes(color = parameter), size = 2, show.legend = FALSE) +
+  geom_point(aes(color = parameter),
+             size = 2,
+             show.legend = FALSE) +
   facet_wrap(. ~ parameter, scales = "free_x") +
-  labs(x = "", 
-       y = "RMSE",
-       title = "Random Forest: Assessing In-Sample Performance of Tuned Hyperparameters",
-       subtitle = "RMSE appears to be minimized at low levels of min_n and mtry") +
+  labs(
+    x = "",
+    y = "RMSE",
+    title = "Random Forest: Assessing In-Sample Performance of Tuned Hyperparameters",
+    subtitle = "RMSE appears to be minimized at low levels of min_n and mtry"
+  ) +
   theme(
     plot.title = element_text(face = "bold", size = 20),
     plot.subtitle = element_text(size = 17),
     strip.background = element_blank(),
     strip.text = element_text(face = "bold", size = 15),
-  ) 
+  )
 
-rf_res %>% 
-  show_best("rmse")
+rf_res %>%
+  show_best(metric = "rmse")
 ```
 
 Let's do the same for the XGBoost model.
@@ -758,9 +787,7 @@ xgb_res %>%
   collect_metrics() %>%
   filter(.metric == "rmse") %>%
   select(mean, mtry:sample_size) %>%
-  pivot_longer(mtry:sample_size,
-               names_to = "parameter",
-               values_to = "value") %>%
+  pivot_longer(mtry:sample_size, names_to = "parameter", values_to = "value") %>%
   ggplot(aes(value, mean)) +
   geom_point(aes(color = parameter),
              size = 2,
@@ -777,10 +804,10 @@ xgb_res %>%
     plot.subtitle = element_text(size = 17),
     strip.background = element_blank(),
     strip.text = element_text(face = "bold", size = 15),
-  ) 
+  )
 
-xgb_res %>% 
-  show_best("rmse")
+xgb_res %>%
+  show_best(metric = "rmse")
 ```
 
 ## Finalizing Hyperparameters
@@ -788,20 +815,20 @@ xgb_res %>%
 The workflows for both the random forest and XGBoost models are now finalized.
 
 ```{r rf xgb finalize workflow}
-rf_best <- rf_res %>% 
-  select_best("rmse")
+rf_best <- rf_res %>%
+  select_best(metric = "rmse")
 
-xgb_best <- xgb_res %>% 
-  select_best("rmse")
+xgb_best <- xgb_res %>%
+  select_best(metric = "rmse")
 
-rf_final_wf <- rf_wf %>% 
+rf_final_wf <- rf_wf %>%
   finalize_workflow(rf_best)
 
-xgb_final_wf <- xgb_wf %>% 
+xgb_final_wf <- xgb_wf %>%
   finalize_workflow(xgb_best)
 ```
 
-# Variable Importance
+# Model Evaluation: Variable Importance
 
 Before running the models on the test data, let's compare variable importance for our models. It can be useful know which, if any, of the predictors in a fitted model are relatively influential on the predicted outcome. 
 
@@ -811,25 +838,25 @@ library(patchwork) #combining plots
 
 p1 <- lasso_final_wf %>% 
   fit(coffee_train) %>% 
-  pull_workflow_fit() %>% 
+  extract_fit_parsnip() %>% 
   vip(geom = "point") +
   ggtitle("LASSO") 
 
 p2 <- rf_final_wf %>% 
   fit(coffee_train) %>% 
-  pull_workflow_fit() %>% 
+  extract_fit_parsnip() %>% 
   vip(geom = "point") +
   ggtitle("Random Forest")
 
 p3 <- xgb_final_wf %>% 
   fit(coffee_train) %>% 
-  pull_workflow_fit() %>% 
+  extract_fit_parsnip() %>% 
   vip(geom = "point") +
   ggtitle("XGBoost")
 
 p1 + p2 / p3 + plot_annotation(
   title = 'Assessing Variable Importance Across Models',
-  subtitle = 'The engineered feature \"meters\" is heavily favoured by the tree-based models,\nwhile also ranking fourth for the LASSO in terms of variable importance',
+  subtitle = 'The engineered feature \"meters\" is heavily favoured by the tree-based models',
   theme = theme(
     plot.title = element_text(size = 18),
     plot.subtitle = element_text(size = 14)
@@ -839,7 +866,7 @@ p1 + p2 / p3 + plot_annotation(
 
 Earlier, Ethiopia stood out as the country with the highest mean scores when visualizing coffee rating scores across countries earlier. Here, it makes sense to see `country_of_origin_Ethiopia` having relatively high variable importance for the LASSO and XGBoost model. The engineered feature, `meters`, has a significant variable importance contribution too for our tree-based models.
 
-# Model Selection
+# Final Model Selection
 
 As a recap, here are the corresponding RMSE values for the set of hyperparameters that was selected for our models.
 
@@ -854,7 +881,7 @@ lasso_res %>%
               show_best(metric = "rmse") %>%
               mutate(model = "xgboost")) %>%
   group_by(model) %>%
-  summarise(lowest_training_rmse = round(min(mean), 3))
+  summarise(lowest_training_rmse = round(min(mean), 2))
 ```
 
 As the final step, for all three models, we perform a `last_fit` using the split data, `coffee_split`.   
@@ -883,5 +910,7 @@ lasso_final_wf %>%
 
 # Conclusion
 
-Test results for all three models are lower than their training scores, indicating the absence of overfitting. Both tree-based models also performed slightly better than the LASSO model, which could mean there are [interaction effects at play](http://www.feat.engineering/approaches-when-complete-enumeration-is-practically-impossible.html#tree-based-methods). While I would select the random forest model in this case, the difference in test RMSE is so close that I'd still be inclined to compare all three models' performance in future.
+Test results for all three models are slightly higher than their training scores, which might indicate some overfitting. Both tree-based models also performed slightly better than the LASSO model, which could mean there are [interaction effects at play](http://www.feat.engineering/approaches-when-complete-enumeration-is-practically-impossible.html#tree-based-methods).   
+
+While I'd still go with either tree-based model, the difference in test RMSE is so close that I'd still be inclined to compare all three models' performance in future.
 

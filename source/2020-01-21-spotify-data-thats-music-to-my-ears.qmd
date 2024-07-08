@@ -5,19 +5,24 @@ date: '2020-01-21'
 format:
   html:
     toc: true
-    toc-depth: 2
+    toc-depth: 3
     toc-location: left
+    toc-expand: true
     number-sections: true
-    number-depth: 2
+    number-depth: 3
     theme: 
-      light: lumen
+      light: flatly
       dark: darkly
     smooth-scroll: true
     embed-resources: true
     page-layout: full
-code-links:
-  text: Home
-  href: index.html
+    other-links:
+      - text: Home
+        icon: house
+        href: index.html
+      - text: GitHub
+        icon: github
+        href: https://github.com/DesmondChoy
 categories: []
 tags:
   - r

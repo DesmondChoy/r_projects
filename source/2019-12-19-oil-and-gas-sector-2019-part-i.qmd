@@ -5,16 +5,24 @@ date: "2019-12-19"
 format:
   html:
     toc: true
-    toc-depth: 2
+    toc-depth: 3
     toc-location: left
+    toc-expand: true
     number-sections: true
-    number-depth: 2
+    number-depth: 3
     theme: 
-      light: lumen
+      light: flatly
       dark: darkly
     smooth-scroll: true
     embed-resources: true
     page-layout: full
+    other-links:
+      - text: Home
+        icon: house
+        href: index.html
+      - text: GitHub
+        icon: github
+        href: https://github.com/DesmondChoy
 categories: []
 tags:
 - r
@@ -45,17 +53,19 @@ This is a fairly long post, so I will be splitting it into two parts:
 * Part I: Data Importing and Wrangling (Tidying)
 * Part II: Exploratory Data Analysis and interpretation of results
 
+# Data science workflow 
 
 ![Workflow in a typical data science project](https://d33wubrfki0l68.cloudfront.net/571b056757d68e6df81a3e3853f54d3c76ad6efc/32d37/diagrams/data-science.png)
 Taken from [R4DS](https://r4ds.had.co.nz/introduction.html).  
 
 This presentation focuses on names under my Oil & Gas sector coverage. They are all investment-grade rating, and I have attempted to analyse them by [sub-sectors](https://www.schedulereader.com/blog/oil-and-gas-industry-overview) (Integrated/Independent/Midstream/Refining) as well as by credit rating buckets.
 
-> Disclaimer
+# Disclaimer
 
 All data that I have used in this presentation is obtained from Bloomberg and I do not own any of it. Nothing in this document should be construed as investment advice, recommendations, an investment strategy, or whether or not to "buy", "sell" or "hold" an investment,  nor should it be construed or relied upon as tax, regulatory or accounting advice.
 
-# Libraries  
+# Import libaries & data
+
 
 ```{r Libraries, warning=FALSE, message=FALSE}
 library(readxl) #data importing
@@ -67,11 +77,11 @@ library(ggrepel) #ggplot identification of data points
 library(here)
 ```
 
-# Brief Background
+## Brief Background
 
 Fixed income analysts regularly use the Bloomberg's SRCH <GO> screen to conduct a *Relative Value* screening of bonds i.e. holding as many parameters equal e.g. same/similar sector, credit rating, duration, credit spreads are analysed and used to determine if a bond is rich/cheap, relatively speaking. Together with fundamental analysis, this assessment on RV would then lead to an investment recommendation.  
 
-# Importing Data  
+## Data  
 
 This bond-related data is extracted from Bloomberg's SRCH. Subsequently, I learnt that Bloomberg prevented said data to be downloaded - which makes me wonder if my usage of this data prompted an internal review?  
 In any case, I'm attempting to use BQL (Bloomberg Query Language) to extract similar data in future. For now, the data is available at my [github](https://github.com/DesmondChoy/r_projects/tree/main/source/data).  
@@ -88,7 +98,7 @@ Energy <- distinct(Energy, CUSIP, .keep_all = TRUE)
 names(Energy) <- tolower(gsub("\\s", "\\.", names(Energy))) 
 ```
 
-> Examining The Data  
+# Examining The Data  
 
 Pre-data wrangling, Bloomberg-extracted data will be either in character or double (numeric; double stands for double precision floating point numbers). Some data I'll require for analysis and visualiztion but are currently missing:
 
@@ -195,7 +205,7 @@ Energy %>%
   summarise(n = n())
 ```
 
-> Comparison Metrics  
+# Comparison Metrics  
 
 I compare the bond data across four fundamental credit metrics:  
 
@@ -206,7 +216,7 @@ I compare the bond data across four fundamental credit metrics:
 
 I focus on changes in spreads over `1y.chg`(Changes in spread over the last twelve months) and `current` (Current Spread).  
 
-> Checking For Missing Values  
+## Checking For Missing Values  
 
 We create a simple function to check for missing values as a percentage of our data in those fields.  
 As we saw from our `skimr` analysis earlier, there is a fair bit of spread data missing (17%) for `1y.chg`, and I suspect this is due to bonds that were  issued within the last twelve months. I am lacking the data to verify this hypothesis (bond issuance date) so this would be something I would include the next time I perform data gathering.
@@ -275,7 +285,7 @@ names(Metrics) <- tolower(gsub("\\s", "\\.", names(Metrics)))
 
 ```
 
-> Bond Universe  
+# Bond Universe  
 
 For an apples-to-apples comparison, I further narrow down my universe of bonds to:  
 * Investment grade, 
@@ -291,6 +301,8 @@ Energy <- Energy %>%
       bloomberg.composite.rating %in% Rating &
       coupon.type == "FIXED")
 ```
+
+## Comparison Table
 
 In the table below we see that my bond universe is skewed towards Integrated Oils, Independent and Midstream sectors.   
 

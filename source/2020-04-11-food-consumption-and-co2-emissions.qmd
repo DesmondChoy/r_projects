@@ -2,7 +2,27 @@
 title: Food Consumption and CO2 Emissions
 author: Desmond Choy
 date: '2020-04-11'
-slug: food-consumption-and-co2-emissions
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    number-depth: 3
+    theme: 
+      light: flatly
+      dark: darkly
+    smooth-scroll: true
+    embed-resources: true
+    page-layout: full
+    other-links:
+      - text: Home
+        icon: house
+        href: index.html
+      - text: GitHub
+        icon: github
+        href: https://github.com/DesmondChoy
 categories: []
 tags:
   - r
@@ -10,8 +30,6 @@ tags:
   - EDA
   - visualization
   - machine learning
-keywords:
-  - tech
 editor_options: 
   chunk_output_type: console
 ---
@@ -27,6 +45,8 @@ This will be my first attempt at machine learning using the `tidymodels` package
 The study analyses data from the Food and Agriculture Organization of the United Nations (FAO) to determine the quantity of produce supplied for consumption of 11 food types for all countries researched. Using CO2 emissions data, the carbon footprint per capita is then calculated for each food type.  
 
 I heavily borrow intuition gleaned from this [blog post](https://juliasilge.com/blog/food-hyperparameter-tune/) by Julia Silge - who does an amazing job at detailing the intricacies of `tidymodels` metapackage in her various blog posts.
+
+# Import libaries & data
 
 ```{r Libraries, warning=FALSE, message=FALSE}
 library(tidyverse)
@@ -53,6 +73,8 @@ food_consumption %>%
   count(food_category)
 
 ```
+
+# EDA
 
 Which food item, on average, contributes the most to co2 emmissions?
 
@@ -116,7 +138,9 @@ food_consumption %>%
 I did not expect Argentina to be on top of that list by such a significant margin. Doing a bit of googling to fact-check, it does appear Argentinians are lovers of red meat. However, that consumption per person also seems to be [coming down](https://www.batimes.com.ar/news/argentina/worlds-biggest-carnivores-are-turning-their-backs-on-beef.phtml), due to a combination of rampant inflation as well as a growing health awareness of non-meat options. But I digress.  
 
 Quite a number of North and South America countries America show up as heavy beef consumers. This gives me an idea - can I predict, using `co2_emmission`, if a country belongs to the Americas or not?  
- 
+
+# Getting country codes
+
 I use the `countrycode` package to create a new column identifying which continent a country belongs to, and further create a binary classification of whether or not the country belongs to Americas.
 
 ```{r}
@@ -140,6 +164,8 @@ food %>%
   select(americas, everything())
 ```
 
+# Data visualization: Scatterplot matrix
+
 Given that all of our variables are numeric, a `ggscatmat` - a scatterplot matrix - can be used:  
 
 * Diagonals represent density plots  
@@ -158,7 +184,9 @@ Nothing too out of the ordinary, although poultry & beef tends to be contribute 
 
 With that, let's dive into modelling. 
 
-> Data Splitting
+# Preparing data
+
+## Data Splitting
 
 We begin by splitting the dataset into training and test sets. I opt to use stratified random sampling - accomplished by selecting samples at random within each class. As Kuhn & Johnson [(2019)](http://www.feat.engineering/data-splitting.html) puts it - this approach ensures that the frequency distribution of the outcome is approximately equal within the training and test sets.
 
@@ -174,7 +202,7 @@ food_test <- testing(food_split)
 
 ```
 
-> Data Preprocessing
+## Data Preprocessing
 
 Next, we use the `recipes` package. The intuition behind this package is to define a recipe or blueprint that can be used to sequentially define the encodings and preprocessing of the data (i.e. feature engineering).  
 
@@ -188,7 +216,7 @@ food_rec
 
 `step_corr`: Potentially remove variables that have large absolute correlations with other variables. Even though the correlation recipe was applied, no terms were removed - implying low multicollinearity.  
 
-> Model Specification
+# Model Specification
 
 Let's begin with the specification of two models - Logistic Regression and Random Forest.
 
@@ -218,7 +246,7 @@ rf_fit <- rf_spec %>%
 rf_fit 
 ```
 
-> Model Evaluation
+# Model Evaluation
 
 Now to compare training results versus test results (which we have not touched up until now).
 
@@ -262,6 +290,7 @@ results_test <- log_fit %>%
 
 ```
 
+## Comparison: Training vs Test metrics
 
 ```{r}
 library(patchwork) #to combine ggplots
@@ -293,9 +322,9 @@ p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
 
 In the training results, random forest does a stellar job with close to perfect scores across these metrics.  
 
-However, in our test results, our logistic regression model handily outperforms random forest. This difference in performance could imply overfitting of the random forest model. Resampling will address this issue of overfitting.  
+However, in our test results, there is overfitting of the random forest model from the drastic performance drop. Resampling will address this issue of overfitting.  
 
-> Resampling
+# Resampling
 
 From Kuhn & Johnson [(2019)](http://www.feat.engineering/resampling.html), resampling methods can generate different versions of our training set that can be used to simulate how well models would perform on new data.  
 
@@ -354,6 +383,6 @@ p3 <- results_train_refit %>%
 
 ```
 
-> Conclusion
+# Conclusion
 
 I've barely explored the tip of the iceberg that is machine learning but I'm excited. There's plenty of room for improvement, especially with regards to data preprocessing via the `recipes` package and hyperparameter tuning via the `tune` package (which I skipped) - which I aim to document in future blog posts. 
